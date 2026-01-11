@@ -3,7 +3,8 @@ set -euo pipefail
 
 APP_DIR="/opt/openppp2"
 COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
-BASE_CFG_URL_DEFAULT="https://raw.githubusercontent.com/<YOUR_GH_USER>/<YOUR_REPO>/main/appsettings.base.json"
+BASE_CFG_URL_DEFAULT="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
+IMAGE_DEFAULT="ghcr.io/lucifer988/openppp2:latest"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -33,7 +34,7 @@ install_docker_if_needed() {
 
   echo "[*] 安装 Docker / docker compose..."
   apt-get update
-  apt-get install -y ca-certificates curl gnupg jq
+  apt-get install -y ca-certificates curl gnupg jq iproute2
 
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -48,21 +49,17 @@ install_docker_if_needed() {
 }
 
 gen_guid() {
+  # 不依赖 uuidgen，避免缺包
   local u
-  u="$(uuidgen | tr '[:lower:]' '[:upper:]')"
+  u="$(cat /proc/sys/kernel/random/uuid | tr '[:lower:]' '[:upper:]')"
   echo "{${u}}"
 }
 
 detect_lan_ip() {
-  # 取默认路由网卡的 IPv4 地址
-  local ifname ip
-  ifname="$(ip route show default 0.0.0.0/0 2>/dev/null | awk '{print $5; exit}')"
-  if [[ -z "$ifname" ]]; then
-    echo ""
-    return
-  fi
-  ip="$(ip -4 addr show dev "$ifname" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)"
-  echo "$ip"
+  # 用 route get 获取 src，更稳
+  local ip
+  ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
+  echo "${ip:-}"
 }
 
 write_compose_server() {
@@ -78,12 +75,6 @@ services:
       - "20000:20000/udp"
     volumes:
       - ./appsettings.json:/opt/openppp2/appsettings.json:ro
-    # 服务端启动命令：./ppp
-    # Dockerfile 里 ENTRYPOINT 是 ./ppp，这里不需要额外 command
-YAML
-
-  # 自动更新（你说不需要手动“更新”选项，所以默认开启）
-  cat >> "$COMPOSE_FILE" <<'YAML'
 
   watchtower:
     image: containrrr/watchtower:latest
@@ -156,22 +147,84 @@ do_install() {
   echo "2) 客户端"
   prompt ROLE "输入 1 或 2" "1"
 
-  # 你的镜像（由 GitHub Actions 自动构建并推送到 GHCR）
-  prompt IMAGE "请输入镜像地址（例如 ghcr.io/<user>/openppp2:latest）" "ghcr.io/<user>/openppp2:latest"
-
-  # 基准配置文件来源：默认从你仓库 raw 下载
-  prompt BASE_CFG_URL "基准配置文件URL（appsettings.base.json 的 raw 链接）" "$BASE_CFG_URL_DEFAULT"
+  prompt IMAGE "请输入镜像地址" "$IMAGE_DEFAULT"
+  prompt BASE_CFG_URL "基准配置文件URL（appsettings.base.json raw 链接）" "$BASE_CFG_URL_DEFAULT"
 
   echo "[*] 下载基准配置..."
   curl -fsSL "$BASE_CFG_URL" -o appsettings.base.json
 
   if [[ "$ROLE" == "1" ]]; then
-    # 服务端：只改 ip.public / ip.interface
     prompt IPADDR "请输入您的IP地址（服务端对外 IP）" ""
     jq --arg ip "$IPADDR" \
       '.ip.public=$ip | .ip.interface=$ip' \
       appsettings.base.json > appsettings.json
-
     write_compose_server "$IMAGE"
 
-  elif [[ "$ROLE" =]()]()
+  elif [[ "$ROLE" == "2" ]]; then
+    prompt SERVER_IP "请输入服务端IP（用于 client.server）" ""
+    local_guid="$(gen_guid)"
+
+    lan_ip="$(detect_lan_ip)"
+    if [[ -z "$lan_ip" ]]; then
+      echo "[!] 没检测到内网IP，你可以手动输入。"
+      prompt lan_ip "请输入客户端内网IP（用于 http-proxy/socks-proxy bind）" ""
+    else
+      echo "[*] 检测到客户端内网IP: ${lan_ip}"
+    fi
+
+    jq --arg srv "ppp://${SERVER_IP}:20000/" \
+       --arg guid "$local_guid" \
+       --arg lan "$lan_ip" \
+      '
+      .client.server=$srv
+      | .client.guid=$guid
+      | .client["http-proxy"].bind=$lan
+      | .client["socks-proxy"].bind=$lan
+      ' appsettings.base.json > appsettings.json
+
+    [[ -f ip.txt ]] || : > ip.txt
+    [[ -f dns-rules.txt ]] || : > dns-rules.txt
+
+    write_compose_client "$IMAGE"
+  else
+    echo "输入错误，只能是 1 或 2"
+    exit 1
+  fi
+
+  echo
+  echo "[*] 启动 openppp2..."
+  docker compose up -d
+
+  echo
+  echo "完成！"
+  echo "配置目录：$APP_DIR"
+  echo "查看日志：cd $APP_DIR && docker compose logs -f openppp2"
+}
+
+do_uninstall() {
+  if [[ -d "$APP_DIR" ]]; then
+    cd "$APP_DIR"
+    echo "[*] 停止并删除容器..."
+    docker compose down --remove-orphans || true
+  fi
+  echo "[*] 删除目录 $APP_DIR ..."
+  rm -rf "$APP_DIR"
+  echo "卸载完成（Docker 本身未卸载）。"
+}
+
+main() {
+  as_root
+
+  echo "请选择："
+  echo "1) 安装 openppp2"
+  echo "2) 卸载 openppp2"
+  prompt ACTION "输入 1 或 2" "1"
+
+  case "$ACTION" in
+    1) do_install ;;
+    2) do_uninstall ;;
+    *) echo "输入错误"; exit 1 ;;
+  esac
+}
+
+main "$@"
