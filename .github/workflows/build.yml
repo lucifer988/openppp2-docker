@@ -2,7 +2,7 @@ name: Build openppp2 image (track upstream releases)
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # 每 30 分钟检查一次
+    - cron: "*/30 * * * *" # every 30 minutes
   workflow_dispatch: {}
 
 permissions:
@@ -24,12 +24,9 @@ jobs:
 
       - name: Get latest upstream tag
         id: upstream
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          TAG="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            https://api.github.com/repos/liulilittle/openppp2/releases/latest | jq -r .tag_name)"
+          TAG="$(curl -fsSL https://api.github.com/repos/liulilittle/openppp2/releases/latest | jq -r .tag_name)"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
