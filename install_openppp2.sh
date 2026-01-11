@@ -11,12 +11,12 @@ DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 COMPOSE_KIND="" # "docker compose" or "docker-compose"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
-
 is_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]]; }
-
 has_systemd() { [[ -d /run/systemd/system ]] && need_cmd systemctl; }
 
-die() { echo "[!]" "$@" >&2; exit 1; }
+die() { echo -e "[!]\t$*" >&2; exit 1; }
+info() { echo -e "[*]\t$*"; }
+warn() { echo -e "[!]\t$*" >&2; }
 
 prompt() {
   local __var="$1" __msg="$2" __def="${3:-}"
@@ -52,71 +52,92 @@ detect_compose() {
 }
 
 apt_install() {
-  # avoid noisy interactive prompts
   export DEBIAN_FRONTEND=noninteractive
+  # 尽量避免配置文件交互（不强制覆盖）
   apt-get update -y
-  apt-get install -y --no-install-recommends "$@"
+  apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
+}
+
+curl_retry() {
+  # 减少网络抖动导致的失败概率
+  curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 120 "$@"
 }
 
 ensure_basic_tools() {
-  # curl/jq/iproute2 are needed for config editing & IP detection
-  apt_install ca-certificates curl jq iproute2 gnupg || true
+  # jq/iproute2 用于 JSON 修改与网卡/IP 自动检测
+  apt_install ca-certificates curl jq iproute2 gnupg >/dev/null 2>&1 || true
+  need_cmd curl || die "curl 未安装成功，请检查 apt 源/网络"
+  need_cmd jq || die "jq 未安装成功，请检查 apt 源/网络"
+  need_cmd ip || die "iproute2 未安装成功，请检查 apt 源/网络"
 }
 
 start_docker_daemon() {
   if has_systemd; then
     systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable --now docker >/dev/null 2>&1 || true
-    systemctl start docker >/dev/null 2>&1 || true
     systemctl enable --now containerd >/dev/null 2>&1 || true
+    systemctl enable --now docker >/dev/null 2>&1 || true
     systemctl start containerd >/dev/null 2>&1 || true
+    systemctl start docker >/dev/null 2>&1 || true
   else
     service containerd start >/dev/null 2>&1 || true
     service docker start >/dev/null 2>&1 || true
   fi
 }
 
+docker_daemon_ok() {
+  need_cmd docker || return 1
+  docker info >/dev/null 2>&1
+}
+
 ensure_docker_stack() {
   ensure_basic_tools
 
-  # Step 1: install docker if command missing OR daemon not available
-  local docker_ok="no"
-  if need_cmd docker && docker info >/dev/null 2>&1; then
-    docker_ok="yes"
-  fi
-
-  if [[ "$docker_ok" != "yes" ]]; then
-    echo "[*] Docker 未就绪（可能未安装或 daemon 未启动），开始安装/修复..."
-    # Debian/Ubuntu: prefer distro packages for max compatibility
-    # docker-compose-plugin may not exist on some repos; fall back to docker-compose
-    apt_install iptables uidmap || true
-    apt_install containerd docker.io || true
-    # compose plugin sometimes missing; ignore failure and use docker-compose
-    apt_install docker-compose-plugin || true
-    apt_install docker-compose || true
-
+  if ! need_cmd docker; then
+    info "检测到未安装 Docker，开始安装（Debian/Ubuntu 默认仓库）..."
+    apt_install containerd docker.io iptables >/dev/null 2>&1 || true
     start_docker_daemon
-
-    if ! docker info >/dev/null 2>&1; then
-      echo "[!] Docker daemon 仍不可用。请把下面两条命令的输出贴出来："
-      echo "    systemctl status docker --no-pager -l"
-      echo "    journalctl -u docker -n 200 --no-pager"
-      echo
-      echo "常见原因："
-      echo " - 你在 OpenVZ/LXC 这类不支持 Docker 的容器/VPS 里（需要换成 KVM/物理机/支持容器的 VPS）"
-      echo " - 内核/权限限制导致 overlay2/iptables 不可用"
-      exit 1
-    fi
   fi
 
-  # Step 2: choose compose
+  if ! docker_daemon_ok; then
+    info "Docker 已安装但 daemon 未就绪，尝试启动/修复..."
+    # 再补装一次常见依赖（不会重复安装）
+    apt_install containerd docker.io iptables >/dev/null 2>&1 || true
+    start_docker_daemon
+  fi
+
+  if ! docker_daemon_ok; then
+    warn "Docker daemon 仍不可用。下面自动输出诊断信息："
+    if has_systemd; then
+      systemctl status docker --no-pager -l || true
+      echo "-----"
+      journalctl -u docker -n 200 --no-pager || true
+    else
+      service docker status || true
+    fi
+    echo
+    die "Docker daemon 不可用（常见原因：OpenVZ/LXC 不支持 Docker；或内核/权限限制导致 overlay2/iptables 不可用）。"
+  fi
+
+  # 选择 compose：优先 docker compose（plugin），避免与 docker-compose 包冲突
   if ! detect_compose; then
-    # try install docker-compose and detect again
-    apt_install docker-compose || true
+    # 先尝试安装 plugin（很多系统有这个包）
+    apt_install docker-compose-plugin >/dev/null 2>&1 || true
+  fi
+
+  if need_cmd docker && docker compose version >/dev/null 2>&1; then
+    COMPOSE_KIND="docker compose"
+  else
+    # plugin 不可用时才考虑 docker-compose
+    # 关键：如果系统已有 docker-compose-plugin，就不要装 docker-compose（Debian trixie 会冲突）
+    if dpkg -s docker-compose-plugin >/dev/null 2>&1; then
+      : # 避免冲突
+    else
+      apt_install docker-compose >/dev/null 2>&1 || true
+    fi
     detect_compose || die "未检测到 compose（docker compose 或 docker-compose）。请安装后重试。"
   fi
 
-  echo "[*] 使用 compose：${COMPOSE_KIND}"
+  info "使用 compose：${COMPOSE_KIND}"
 }
 
 gen_guid() {
@@ -133,9 +154,15 @@ detect_net() {
   dev="$(awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")"
   gw="$(awk '/via/ {for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$out")"
 
-  # fallback
+  # fallback：默认路由
   if [[ -z "$dev" ]]; then dev="$(ip route show default 2>/dev/null | awk 'NR==1{print $5}')" || true; fi
   if [[ -z "$gw"  ]]; then gw="$(ip route show default 2>/dev/null | awk 'NR==1{print $3}')" || true; fi
+  if [[ -z "$lan" ]]; then
+    # 从默认网卡取一个 IPv4
+    if [[ -n "${dev:-}" ]]; then
+      lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
+    fi
+  fi
 
   echo "${lan:-}|${dev:-}|${gw:-}"
 }
@@ -144,22 +171,36 @@ download_base_cfg() {
   local url="$1"
   mkdir -p "$APP_DIR"
   cd "$APP_DIR"
-  echo "[*] 下载基准配置..."
-  curl -fsSL "$url" -o appsettings.base.json
+  info "下载基准配置..."
+  curl_retry -sS "$url" -o appsettings.base.json
 }
 
 enable_ip_forward_host() {
-  echo "[*] 开启宿主机 IPv4 转发（client 模式需要）..."
-  sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
-  cat >/etc/sysctl.d/99-openppp2.conf <<'EOF'
+  info "开启宿主机 IPv4 转发（client 模式需要）..."
+  if sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1; then
+    cat >/etc/sysctl.d/99-openppp2.conf <<'EOF'
 net.ipv4.ip_forward=1
 EOF
-  sysctl --system >/dev/null 2>&1 || true
+    sysctl --system >/dev/null 2>&1 || true
+  else
+    warn "宿主机 sysctl 写入失败（可能权限受限）。client 模式可能无法正常转发。"
+    warn "你可以手动执行：sysctl -w net.ipv4.ip_forward=1"
+  fi
+}
+
+compose_header() {
+  # docker-compose(v1) 对没有 version 的文件兼容性差一些
+  # docker compose(v2) 有 version 会警告但不影响使用
+  if [[ "$COMPOSE_KIND" == "docker-compose" ]]; then
+    echo 'version: "3.8"'
+  fi
 }
 
 write_compose_server() {
   local image="$1"
-  cat >"$COMPOSE_FILE" <<EOF
+  {
+    compose_header
+    cat <<EOF
 services:
   openppp2:
     image: ${image}
@@ -171,12 +212,14 @@ services:
       - "20000:20000/tcp"
       - "20000:20000/udp"
 EOF
+  } >"$COMPOSE_FILE"
 }
 
 write_compose_client() {
   local image="$1" nic="$2" gw="$3"
-
-  cat >"$COMPOSE_FILE" <<EOF
+  {
+    compose_header
+    cat <<EOF
 services:
   openppp2:
     image: ${image}
@@ -212,11 +255,14 @@ services:
       - "--bypass-iplist-ngw"
       - "${gw}"
 EOF
+  } >"$COMPOSE_FILE"
 }
 
 setup_systemd_weekly_update() {
   echo
-  echo "[*] 设置 systemd 每周自动更新（拉最新镜像并重启 openppp2）"
+  info "设置 systemd 每周自动更新（拉最新镜像并重启 openppp2）"
+  echo "    例子：Sun *-*-* 03:00:00  表示每周日 03:00 执行"
+  echo "         Mon *-*-* 04:30:00  表示每周一 04:30 执行"
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
 
@@ -232,13 +278,15 @@ else
 fi
 
 "${dc[@]}" pull openppp2
-"${dc[@]}" up -d openppp2
+"${dc[@]}" up -d --remove-orphans openppp2
 EOF
   chmod +x /usr/local/bin/openppp2-update.sh
 
   cat >/etc/systemd/system/openppp2-update.service <<'EOF'
 [Unit]
 Description=Update openppp2 container image
+After=docker.service
+Requires=docker.service
 
 [Service]
 Type=oneshot
@@ -262,7 +310,20 @@ EOF
     systemctl daemon-reload
     systemctl enable --now openppp2-update.timer
   else
-    echo "[!] 你的环境没有 systemd，无法启用 timer。你可以改用 crontab 定时执行 /usr/local/bin/openppp2-update.sh"
+    warn "你的环境没有 systemd，无法启用 timer。你可以改用 crontab 定时执行 /usr/local/bin/openppp2-update.sh"
+  fi
+}
+
+health_check() {
+  # 简单检查容器是否存活，若没起来给出提示
+  if ! docker ps --format '{{.Names}}' | grep -qx 'openppp2'; then
+    warn "openppp2 容器未处于运行状态。请查看日志："
+    echo "    cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 openppp2"
+    echo
+    warn "如果你看到 io_uring_queue_init: Operation not permitted："
+    warn " - 说明镜像里是 io-uring 版本，在某些内核/安全策略下会被限制。"
+    warn " - 你需要换用 non-io-uring 的 openppp2 版本重新构建镜像，或改用对应 tag 的镜像。"
+    exit 1
   fi
 }
 
@@ -282,9 +343,19 @@ do_install() {
   download_base_cfg "$BASE_URL"
   cd "$APP_DIR"
 
+  # 清理旧 watchtower（你之前用过，避免遗留）
+  docker rm -f watchtower >/dev/null 2>&1 || true
+
   if [[ "$ROLE" == "1" ]]; then
     local SERVER_PUBLIC_IP
-    prompt SERVER_PUBLIC_IP "请输入您的IP地址（服务端对外 IP）" ""
+    # 给个“尽力自动检测”的默认值（失败就空）
+    local autoip=""
+    autoip="$(curl_retry -sS https://api.ipify.org 2>/dev/null || true)"
+    if [[ -n "$autoip" ]]; then
+      prompt SERVER_PUBLIC_IP "请输入您的IP地址（服务端对外 IP）" "$autoip"
+    else
+      prompt SERVER_PUBLIC_IP "请输入您的IP地址（服务端对外 IP）" ""
+    fi
 
     jq --arg ip "$SERVER_PUBLIC_IP" \
       '.ip.public=$ip | .ip.interface=$ip' \
@@ -293,6 +364,8 @@ do_install() {
     write_compose_server "$IMAGE"
 
   elif [[ "$ROLE" == "2" ]]; then
+    [[ -c /dev/net/tun ]] || die "/dev/net/tun 不存在：当前宿主机不支持 TUN（或未开启），client 模式无法运行"
+
     local SERVER_IP guid lan nic gw netinfo
     prompt SERVER_IP "请输入服务端IP（用于 client.server）" ""
 
@@ -302,22 +375,24 @@ do_install() {
     nic="${netinfo%%|*}"; gw="${netinfo#*|}"
 
     if [[ -z "$lan" ]]; then
-      echo "[!] 没检测到客户端内网IP（src），请手动输入。"
+      warn "没检测到客户端内网IP（src），请手动输入。"
       prompt lan "请输入客户端内网IP（用于 http-proxy/socks-proxy bind）" ""
     else
-      echo "[*] 检测到客户端内网IP: ${lan}"
+      info "检测到客户端内网IP: ${lan}"
     fi
+
     if [[ -z "$nic" ]]; then
-      echo "[!] 没检测到默认网卡名（dev），请手动输入。"
+      warn "没检测到默认网卡名（dev），请手动输入。"
       prompt nic "请输入默认网卡名（例如 eth0/ens3/ens192）" ""
     else
-      echo "[*] 检测到默认网卡: ${nic}"
+      info "检测到默认网卡: ${nic}"
     fi
+
     if [[ -z "$gw" ]]; then
-      echo "[!] 没检测到默认网关（via），请手动输入。"
+      warn "没检测到默认网关（via），请手动输入。"
       prompt gw "请输入默认网关（例如 192.168.1.1）" ""
     else
-      echo "[*] 检测到默认网关: ${gw}"
+      info "检测到默认网关: ${gw}"
     fi
 
     jq --arg srv "ppp://${SERVER_IP}:20000/" \
@@ -332,16 +407,21 @@ do_install() {
     [[ -f ip.txt ]] || : > ip.txt
     [[ -f dns-rules.txt ]] || : > dns-rules.txt
 
+    # 你之前踩过：不要把 sysctl 写到容器里，network_mode: host 会直接报错
+    # 正确做法：只改宿主机
     enable_ip_forward_host
+
     write_compose_client "$IMAGE" "$nic" "$gw"
   else
     die "输入错误，只能是 1 或 2"
   fi
 
   echo
-  echo "[*] 启动 openppp2..."
+  info "启动 openppp2..."
   cd "$APP_DIR"
-  compose up -d
+  compose up -d --remove-orphans
+
+  health_check
 
   setup_systemd_weekly_update
 
@@ -354,30 +434,34 @@ do_install() {
 }
 
 do_uninstall() {
-  ensure_docker_stack
-
-  echo "[*] 停止并移除 systemd 定时更新..."
+  # 卸载尽量“宽容”：即使 docker 不可用也清理文件与 systemd
+  info "停止并移除 systemd 定时更新（如果存在）..."
   if has_systemd; then
     systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
   fi
   rm -f /etc/systemd/system/openppp2-update.timer \
         /etc/systemd/system/openppp2-update.service \
-        /usr/local/bin/openppp2-update.sh || true
+        /usr/local/bin/openppp2-update.sh >/dev/null 2>&1 || true
   if has_systemd; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
 
   # 清理旧 watchtower（如果曾经用过）
-  docker rm -f watchtower 2>/dev/null || true
+  if need_cmd docker; then
+    docker rm -f watchtower >/dev/null 2>&1 || true
+  fi
 
-  if [[ -d "$APP_DIR" ]]; then
+  if [[ -d "$APP_DIR" ]] && need_cmd docker; then
     cd "$APP_DIR"
-    detect_compose || true
+    detect_compose >/dev/null 2>&1 || true
     if [[ -n "$COMPOSE_KIND" ]]; then
-      echo "[*] 停止并删除容器..."
+      info "停止并删除容器..."
       compose down --remove-orphans >/dev/null 2>&1 || true
+    else
+      # 兜底：直接删容器
+      docker rm -f openppp2 >/dev/null 2>&1 || true
     fi
   fi
 
-  echo "[*] 删除目录 ${APP_DIR} ..."
+  info "删除目录 ${APP_DIR} ..."
   rm -rf "$APP_DIR"
 
   # 可选：恢复 ip_forward 持久化配置（如果你不想保留）
@@ -388,9 +472,7 @@ do_uninstall() {
 }
 
 main() {
-  if ! is_root; then
-    die "请用 root 执行：sudo bash $0"
-  fi
+  is_root || die "请用 root 执行：sudo bash $0"
 
   echo "请选择："
   echo "1) 安装 openppp2"
