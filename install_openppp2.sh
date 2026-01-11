@@ -3,8 +3,13 @@ set -euo pipefail
 
 APP_DIR="/opt/openppp2"
 COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
+
 BASE_CFG_URL_DEFAULT="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
 IMAGE_DEFAULT="ghcr.io/lucifer988/openppp2:latest"
+
+UPDATE_SCRIPT="/usr/local/bin/openppp2-update.sh"
+SERVICE_FILE="/etc/systemd/system/openppp2-update.service"
+TIMER_FILE="/etc/systemd/system/openppp2-update.timer"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -49,14 +54,12 @@ install_docker_if_needed() {
 }
 
 gen_guid() {
-  # 不依赖 uuidgen，避免缺包
   local u
   u="$(cat /proc/sys/kernel/random/uuid | tr '[:lower:]' '[:upper:]')"
   echo "{${u}}"
 }
 
 detect_lan_ip() {
-  # 用 route get 获取 src，更稳
   local ip
   ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
   echo "${ip:-}"
@@ -75,14 +78,8 @@ services:
       - "20000:20000/udp"
     volumes:
       - ./appsettings.json:/opt/openppp2/appsettings.json:ro
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --cleanup --interval 300 openppp2
+    security_opt:
+      - seccomp=unconfined
 YAML
 }
 
@@ -105,6 +102,8 @@ services:
       - ./appsettings.json:/opt/openppp2/appsettings.json:ro
       - ./ip.txt:/opt/openppp2/ip.txt:ro
       - ./dns-rules.txt:/opt/openppp2/dns-rules.txt:ro
+    security_opt:
+      - seccomp=unconfined
     command:
       - "--mode=client"
       - "--config=appsettings.json"
@@ -124,15 +123,50 @@ services:
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=ens192"
       - "--bypass-iplist-ngw=192.168.88.1"
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --cleanup --interval 300 openppp2
 YAML
+}
+
+install_systemd_timer_weekly() {
+  cat > "$UPDATE_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+set -e
+cd /opt/openppp2
+docker compose pull openppp2
+docker compose up -d openppp2
+EOF
+  chmod +x "$UPDATE_SCRIPT"
+
+  cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Update openppp2 container image
+
+[Service]
+Type=oneshot
+ExecStart=${UPDATE_SCRIPT}
+EOF
+
+  # 每周日 03:00 运行；Persistent=true 表示如果关机错过，开机后补跑一次
+  # OnCalendar 表达式参考：weekly / Sun *-*-* 03:00:00 :contentReference[oaicite:3]{index=3}
+  cat > "$TIMER_FILE" <<'EOF'
+[Unit]
+Description=Run openppp2 update weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now openppp2-update.timer
+}
+
+remove_systemd_timer() {
+  systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
+  rm -f "$TIMER_FILE" "$SERVICE_FILE" "$UPDATE_SCRIPT"
+  systemctl daemon-reload
 }
 
 do_install() {
@@ -155,9 +189,7 @@ do_install() {
 
   if [[ "$ROLE" == "1" ]]; then
     prompt IPADDR "请输入您的IP地址（服务端对外 IP）" ""
-    jq --arg ip "$IPADDR" \
-      '.ip.public=$ip | .ip.interface=$ip' \
-      appsettings.base.json > appsettings.json
+    jq --arg ip "$IPADDR" '.ip.public=$ip | .ip.interface=$ip' appsettings.base.json > appsettings.json
     write_compose_server "$IMAGE"
 
   elif [[ "$ROLE" == "2" ]]; then
@@ -175,12 +207,11 @@ do_install() {
     jq --arg srv "ppp://${SERVER_IP}:20000/" \
        --arg guid "$local_guid" \
        --arg lan "$lan_ip" \
-      '
-      .client.server=$srv
-      | .client.guid=$guid
-      | .client["http-proxy"].bind=$lan
-      | .client["socks-proxy"].bind=$lan
-      ' appsettings.base.json > appsettings.json
+      '.client.server=$srv
+       | .client.guid=$guid
+       | .client["http-proxy"].bind=$lan
+       | .client["socks-proxy"].bind=$lan' \
+      appsettings.base.json > appsettings.json
 
     [[ -f ip.txt ]] || : > ip.txt
     [[ -f dns-rules.txt ]] || : > dns-rules.txt
@@ -195,18 +226,25 @@ do_install() {
   echo "[*] 启动 openppp2..."
   docker compose up -d
 
+  echo "[*] 安装 systemd 每周更新定时器..."
+  install_systemd_timer_weekly
+
   echo
   echo "完成！"
   echo "配置目录：$APP_DIR"
   echo "查看日志：cd $APP_DIR && docker compose logs -f openppp2"
+  echo "查看定时器：systemctl list-timers --all | grep openppp2"
 }
 
 do_uninstall() {
+  remove_systemd_timer
+
   if [[ -d "$APP_DIR" ]]; then
     cd "$APP_DIR"
     echo "[*] 停止并删除容器..."
     docker compose down --remove-orphans || true
   fi
+
   echo "[*] 删除目录 $APP_DIR ..."
   rm -rf "$APP_DIR"
   echo "卸载完成（Docker 本身未卸载）。"
