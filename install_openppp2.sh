@@ -39,6 +39,20 @@ prompt() {
   printf -v "$__var" "%s" "$__val"
 }
 
+prompt_port() {
+  local __var="$1" __msg="$2" __def="${3:-20000}"
+  local p=""
+  while :; do
+    prompt p "$__msg" "$__def"
+    # 纯数字校验
+    if [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )); then
+      printf -v "$__var" "%s" "$p"
+      return 0
+    fi
+    warn "端口必须是 1-65535 的纯数字（你输入的是：$p），请重新输入。"
+  done
+}
+
 compose() {
   if [[ "$COMPOSE_KIND" == "docker compose" ]]; then
     docker compose "$@"
@@ -70,10 +84,8 @@ curl_retry() {
   curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 120 "$@"
 }
 
-# 强制 APT 走 IPv4，避免卡在 debian.map.fastlydns.net 的 IPv6
 force_apt_ipv4() {
   local cfg="/etc/apt/apt.conf.d/99force-ipv4"
-
   if [[ -f "$cfg" ]] && grep -q 'Acquire::ForceIPv4' "$cfg" 2>/dev/null; then
     info "APT 已设置为强制使用 IPv4。"
     return 0
@@ -81,7 +93,6 @@ force_apt_ipv4() {
   if ! need_cmd apt-get; then
     return 0
   fi
-
   info "正在为 APT 启用 IPv4 优先策略（避免 IPv6 卡住）..."
   cat > "$cfg" <<EOF
 Acquire::ForceIPv4 "true";
@@ -92,7 +103,7 @@ EOF
 ensure_basic_tools() {
   force_apt_ipv4
   if need_cmd apt-get; then
-    apt_install ca-certificates curl jq iproute2 gnupg 2>/dev/null || true
+    apt_install ca-certificates curl jq iproute2 gnupg >/dev/null 2>&1 || true
   fi
   need_cmd curl || die "curl 未安装成功，请手动安装 curl 后重试。"
   need_cmd jq   || die "jq 未安装成功，请手动安装 jq 后重试。"
@@ -123,7 +134,7 @@ ensure_docker_stack() {
   else
     if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
       warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 docker.io ..."
-      apt_install docker.io 2>/dev/null || warn "通过 apt 安装 docker.io 失败，请参考官方文档手动安装 Docker。"
+      apt_install docker.io >/dev/null 2>&1 || warn "通过 apt 安装 docker.io 失败，请参考官方文档手动安装 Docker。"
       start_docker_daemon_soft
     else
       warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
@@ -131,33 +142,11 @@ ensure_docker_stack() {
   fi
 
   if ! docker_daemon_ok; then
-    cat <<EOF >&2
-[!]
-  无法检测到可用的 Docker 环境，脚本无法继续自动部署。
-
-  建议你手动安装 Docker（任选一种方式）：
-    1) 发行版自带包：apt-get install docker.io
-    2) Docker 官方 docker-ce：
-       https://docs.docker.com/engine/install/
-
-  安装并确认 'docker info' 正常后，再重新执行本脚本。
-EOF
-    exit 1
+    die "Docker daemon 不可用。请先确保 docker info 正常后再运行脚本。"
   fi
 
   if ! detect_compose; then
-    cat <<EOF >&2
-[!]
-  已检测到 Docker，但未检测到 docker compose / docker-compose。
-
-  请手动安装其中之一后再运行本脚本（Debian/Ubuntu 示例）：
-    - apt-get install docker-compose
-
-  并确保以下任意命令可正常执行：
-    - docker compose version
-    - docker-compose version
-EOF
-    exit 1
+    die "未检测到 docker compose 或 docker-compose。请先安装 compose 后再运行脚本。"
   fi
 
   info "已选择使用 compose：${COMPOSE_KIND}"
@@ -269,7 +258,7 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# ✅ 强制：永远不写 --tun-host（彻底禁用默认出网）
+# ✅ 关键：明确写 --tun-host=no
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
@@ -292,6 +281,7 @@ services:
     command:
       - "--mode=client"
       - "--config=${cfg}"
+      - "--tun-host=no"
       - "--tun=${tun_name}"
       - "--tun-ip=${tun_ip}"
       - "--tun-gw=${tun_gw}"
@@ -313,7 +303,7 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# ✅ 强制：永远不写 --tun-host（彻底禁用默认出网）
+# ✅ 关键：明确写 --tun-host=no
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
@@ -335,6 +325,7 @@ append_compose_client() {
     command:
       - "--mode=client"
       - "--config=${cfg}"
+      - "--tun-host=no"
       - "--tun=${tun_name}"
       - "--tun-ip=${tun_ip}"
       - "--tun-gw=${tun_gw}"
@@ -417,8 +408,6 @@ health_check_one() {
   if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
     warn "容器未运行：${svc}"
     echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}"
-    echo
-    warn "如看到 io_uring_queue_init: Operation not permitted：可能内核/策略限制 io-uring。"
     exit 1
   fi
 }
@@ -445,14 +434,14 @@ do_install() {
 
   if [[ "$ROLE" == "1" ]]; then
     local APP_CFG_NAME
-    prompt APP_CFG_NAME "请输入要生成的服务端配置文件名称（例如 appsettings.json 或 appsettings-server.json）" "appsettings.json"
+    prompt APP_CFG_NAME "请输入要生成的服务端配置文件名称（例如 appsettings.json）" "appsettings.json"
 
     local SERVER_PUBLIC_IP autoip=""
     autoip="$(curl_retry -sS https://api.ipify.org 2>/dev/null || true)"
     if [[ -n "$autoip" ]]; then
-      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址（用于 ip.public / ip.interface）" "$autoip"
+      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" "$autoip"
     else
-      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址（用于 ip.public / ip.interface）" ""
+      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" ""
     fi
 
     jq --arg ip "$SERVER_PUBLIC_IP" \
@@ -466,14 +455,14 @@ do_install() {
     [[ -c /dev/net/tun ]] || die "/dev/net/tun 不存在：宿主机不支持 TUN，client 无法运行。"
 
     local APP_CFG_NAME
-    prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings.json 或 appsettings-HK.json）" "appsettings.json"
+    prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings-RFCHK.json）" "appsettings.json"
 
     local MAIN_SERVICE_NAME
     prompt MAIN_SERVICE_NAME "请输入主客户端实例名称（容器/服务名）" "openppp2"
 
     local SERVER_IP SERVER_PORT guid lan nic gw netinfo
     prompt SERVER_IP "请输入服务端 IP（例如 1.2.3.4）" ""
-    prompt SERVER_PORT "请输入服务端端口（例如 20000）" "20000"
+    prompt_port SERVER_PORT "请输入服务端端口（例如 20000）" "20000"
 
     guid="$(gen_guid)"
     netinfo="$(detect_net)"
@@ -481,7 +470,7 @@ do_install() {
     nic="${netinfo%%|*}"; gw="${netinfo#*|}"
 
     if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
-      warn "自动检测到的 LAN IP 为空或为 10.x（可能是 tun），请手动输入正确的内网 IP。"
+      warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
       prompt lan "请输入客户端内网 IP（用于 http/socks bind，例如 192.168.1.100）" ""
     else
       info "检测到客户端内网 IP：${lan}"
@@ -528,12 +517,11 @@ do_install() {
 
     enable_ip_forward_host
 
-    # 每个实例用不同 tun 名称/网段（但不做默认出网）
-    local main_tun_name="ppp0"
+    local tun_name="ppp0"
     local tun_ip="10.0.0.2"
     local tun_gw="10.0.0.1"
 
-    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$main_tun_name" "$tun_ip" "$tun_gw"
+    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$tun_name" "$tun_ip" "$tun_gw"
 
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
@@ -544,7 +532,7 @@ do_install() {
     echo "  server   ：${SERVER_URI}"
     echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
     echo "  HTTP     ：${lan}:${HTTP_PORT}"
-    echo "  说明     ：已强制禁用 tun-host（不会改宿主默认路由）"
+    echo "  tun-host ：no（已强制写入命令行参数）"
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
@@ -634,7 +622,7 @@ do_add_client() {
 
   local SERVER_IP SERVER_PORT guid lan nic gw netinfo
   prompt SERVER_IP "请输入新增客户端要连接的服务端 IP（例如 1.2.3.4）" ""
-  prompt SERVER_PORT "请输入新增客户端要连接的服务端端口（例如 20000）" "20000"
+  prompt_port SERVER_PORT "请输入新增客户端要连接的服务端端口（例如 20000）" "20000"
 
   guid="$(gen_guid)"
   netinfo="$(detect_net)"
@@ -642,7 +630,7 @@ do_add_client() {
   nic="${netinfo%%|*}"; gw="${netinfo#*|}"
 
   if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
-    warn "自动检测到的 LAN IP 为空或为 10.x（可能是 tun），请手动输入正确的内网 IP。"
+    warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
     prompt lan "请输入客户端内网 IP（用于 http/socks bind，例如 192.168.1.100）" ""
   else
     info "检测到客户端内网 IP：${lan}"
@@ -725,7 +713,7 @@ do_add_client() {
   echo "  server   ：${SERVER_URI}"
   echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
   echo "  HTTP     ：${lan}:${HTTP_PORT}"
-  echo "  说明     ：已强制禁用 tun-host（不会改宿主默认路由）"
+  echo "  tun-host ：no（已强制写入命令行参数）"
   echo
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
 }
@@ -768,9 +756,6 @@ do_show_info() {
 
 check_env_supported() {
   is_root || die "请使用 root 身份执行本脚本，例如：sudo bash $0"
-  if ! need_cmd apt-get; then
-    warn "未检测到 apt-get，脚本将假设你已手动安装好 Docker/compose/依赖工具。"
-  fi
   if [[ ! -f /etc/debian_version ]]; then
     warn "未检测到 /etc/debian_version，系统可能不是标准 Debian/Ubuntu。"
   fi
