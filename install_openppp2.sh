@@ -70,6 +70,7 @@ curl_retry() {
   curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 120 "$@"
 }
 
+# 强制 APT 走 IPv4，避免卡在 debian.map.fastlydns.net 的 IPv6
 force_apt_ipv4() {
   local cfg="/etc/apt/apt.conf.d/99force-ipv4"
 
@@ -189,7 +190,7 @@ random_free_port() {
 }
 
 # 返回 "LAN_IP|DEV|GW"
-# 规则：尽量从默认物理网卡拿 LAN_IP，避免拿到 tun/ppp 的 10.x.x.x
+# 尽量取物理网卡 IP，避免取到 ppp/tun 的 10.x
 detect_net() {
   local out lan dev gw
 
@@ -268,8 +269,9 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
+# ✅ 强制：永远不写 --tun-host（彻底禁用默认出网）
 write_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_host="$6" tun_name="$7" tun_ip="$8" tun_gw="$9"
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
     compose_header
     cat <<EOF
@@ -290,11 +292,6 @@ services:
     command:
       - "--mode=client"
       - "--config=${cfg}"
-EOF
-    if [[ "$tun_host" == "yes" ]]; then
-      echo '      - "--tun-host"'
-    fi
-    cat <<EOF
       - "--tun=${tun_name}"
       - "--tun-ip=${tun_ip}"
       - "--tun-gw=${tun_gw}"
@@ -316,8 +313,9 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
+# ✅ 强制：永远不写 --tun-host（彻底禁用默认出网）
 append_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_host="$8" tun_name="$9" tun_ip="${10}" tun_gw="${11}"
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
     cat <<EOF
 
@@ -337,11 +335,6 @@ append_compose_client() {
     command:
       - "--mode=client"
       - "--config=${cfg}"
-EOF
-    if [[ "$tun_host" == "yes" ]]; then
-      echo '      - "--tun-host"'
-    fi
-    cat <<EOF
       - "--tun=${tun_name}"
       - "--tun-ip=${tun_ip}"
       - "--tun-gw=${tun_gw}"
@@ -430,18 +423,6 @@ health_check_one() {
   fi
 }
 
-validate_proxy_bind_not_tun() {
-  local cfg="$1"
-  local hb sb
-  hb="$(jq -r '.client["http-proxy"].bind // ""' "$cfg" 2>/dev/null || true)"
-  sb="$(jq -r '.client["socks-proxy"].bind // ""' "$cfg" 2>/dev/null || true)"
-  if [[ "$hb" =~ ^10\. ]] || [[ "$sb" =~ ^10\. ]]; then
-    warn "检测到代理 bind 绑定到了 10.x（可能是 tun IP），这会导致你看到的代理地址不正确。"
-    warn "http-proxy.bind=${hb} socks-proxy.bind=${sb}"
-    warn "建议：重新输入正确的 LAN IP，或确保默认网卡不是 ppp/tun/wg。"
-  fi
-}
-
 do_install() {
   ensure_docker_stack
 
@@ -522,14 +503,6 @@ do_install() {
 
     local SERVER_URI="ppp://${SERVER_IP}:${SERVER_PORT}/"
 
-    local MAIN_TUN_HOST_CHOICE MAIN_TUN_HOST_FLAG
-    prompt MAIN_TUN_HOST_CHOICE "是否将该客户端设置为默认出网（全局代理）？(y/n)" "y"
-    if [[ "$MAIN_TUN_HOST_CHOICE" =~ ^[Yy]$ ]]; then
-      MAIN_TUN_HOST_FLAG="yes"
-    else
-      MAIN_TUN_HOST_FLAG="no"
-    fi
-
     local HTTP_PORT SOCKS_PORT
     HTTP_PORT="$(random_free_port)"
     SOCKS_PORT="$(random_free_port)"
@@ -550,18 +523,17 @@ do_install() {
         | .client["socks-proxy"].port=$sport ' \
       appsettings.base.json > "$APP_CFG_NAME"
 
-    validate_proxy_bind_not_tun "$APP_CFG_NAME"
-
     [[ -f ip.txt ]] || : > ip.txt
     [[ -f dns-rules.txt ]] || : > dns-rules.txt
 
     enable_ip_forward_host
 
+    # 每个实例用不同 tun 名称/网段（但不做默认出网）
     local main_tun_name="ppp0"
     local tun_ip="10.0.0.2"
     local tun_gw="10.0.0.1"
 
-    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$MAIN_TUN_HOST_FLAG" "$main_tun_name" "$tun_ip" "$tun_gw"
+    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$main_tun_name" "$tun_ip" "$tun_gw"
 
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
@@ -572,6 +544,7 @@ do_install() {
     echo "  server   ：${SERVER_URI}"
     echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
     echo "  HTTP     ：${lan}:${HTTP_PORT}"
+    echo "  说明     ：已强制禁用 tun-host（不会改宿主默认路由）"
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
@@ -710,14 +683,6 @@ do_add_client() {
   local ipfile="ip-${SVC_NAME}.txt"
   local dnsfile="dns-rules-${SVC_NAME}.txt"
 
-  local TUN_HOST_CHOICE TUN_HOST_FLAG
-  prompt TUN_HOST_CHOICE "是否将该客户端设置为默认出网（全局代理）？(y/n)" "n"
-  if [[ "$TUN_HOST_CHOICE" =~ ^[Yy]$ ]]; then
-    TUN_HOST_FLAG="yes"
-  else
-    TUN_HOST_FLAG="no"
-  fi
-
   local tun_idx="$idx"
   local tun_ip="10.0.${tun_idx}.2"
   local tun_gw="10.0.${tun_idx}.1"
@@ -743,14 +708,12 @@ do_add_client() {
       | .client["socks-proxy"].port=$sport ' \
     appsettings.base.json > "${CFG_NAME}"
 
-  validate_proxy_bind_not_tun "$CFG_NAME"
-
   [[ -f "$ipfile" ]] || : > "$ipfile"
   [[ -f "$dnsfile" ]] || : > "$dnsfile"
 
   enable_ip_forward_host
 
-  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${TUN_HOST_FLAG}" "${tun_name}" "${tun_ip}" "${tun_gw}"
+  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}"
 
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
@@ -762,6 +725,7 @@ do_add_client() {
   echo "  server   ：${SERVER_URI}"
   echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
   echo "  HTTP     ：${lan}:${HTTP_PORT}"
+  echo "  说明     ：已强制禁用 tun-host（不会改宿主默认路由）"
   echo
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
 }
