@@ -177,8 +177,6 @@ random_free_port() {
   done
 }
 
-# 返回 "LAN_IP|DEV|GW"
-# 尽量取物理网卡 IP，避免取到 ppp/tun 的 10.x
 detect_net() {
   local out lan dev gw
 
@@ -257,7 +255,6 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# ✅ 关键：明确写 --tun-host=no
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
@@ -302,7 +299,6 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# ✅ 关键：明确写 --tun-host=no
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
@@ -352,7 +348,7 @@ setup_systemd_weekly_update() {
     return 0
   fi
 
-  echo
+  echo >&2
   info "设置 systemd 每周自动更新（pull + up -d）"
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
@@ -406,7 +402,7 @@ health_check_one() {
   local svc="$1"
   if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
     warn "容器未运行：${svc}"
-    echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}"
+    echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}" >&2
     exit 1
   fi
 }
@@ -414,11 +410,11 @@ health_check_one() {
 do_install() {
   ensure_docker_stack
 
-  echo "=============================="
-  echo "  请选择安装/部署角色："
-  echo "    1) 服务端（Server）"
-  echo "    2) 客户端（Client）"
-  echo "=============================="
+  echo "==============================" >&2
+  echo "  请选择安装/部署角色：" >&2
+  echo "    1) 服务端（Server）" >&2
+  echo "    2) 客户端（Client）" >&2
+  echo "==============================" >&2
   local ROLE
   prompt ROLE "请输入数字选择（1 或 2）" "1"
 
@@ -525,18 +521,18 @@ do_install() {
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
 
-    echo
-    echo "当前客户端配置信息："
-    echo "  配置文件：${APP_CFG_NAME}"
-    echo "  server   ：${SERVER_URI}"
-    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
-    echo "  HTTP     ：${lan}:${HTTP_PORT}"
-    echo "  tun-host ：no（已强制写入命令行参数）"
+    echo >&2
+    echo "当前客户端配置信息：" >&2
+    echo "  配置文件：${APP_CFG_NAME}" >&2
+    echo "  server   ：${SERVER_URI}" >&2
+    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
+    echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
+    echo "  tun-host ：no（已强制写入命令行参数）" >&2
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
 
-  echo
+  echo >&2
   info "启动 openppp2..."
   cd "$APP_DIR"
   compose up -d --remove-orphans
@@ -549,10 +545,10 @@ do_install() {
 
   setup_systemd_weekly_update
 
-  echo
-  echo "===== 完成 ====="
-  echo "配置目录：${APP_DIR}"
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
+  echo >&2
+  echo "===== 完成 =====" >&2
+  echo "配置目录：${APP_DIR}" >&2
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>" >&2
 }
 
 do_uninstall() {
@@ -706,21 +702,19 @@ do_add_client() {
   compose up -d --remove-orphans "${SVC_NAME}"
   health_check_one "${SVC_NAME}"
 
-  echo
-  echo "当前新增客户端配置信息："
-  echo "  配置文件：${CFG_NAME}"
-  echo "  server   ：${SERVER_URI}"
-  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
-  echo "  HTTP     ：${lan}:${HTTP_PORT}"
-  echo "  tun-host ：no（已强制写入命令行参数）"
-  echo
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
+  echo >&2
+  echo "当前新增客户端配置信息：" >&2
+  echo "  配置文件：${CFG_NAME}" >&2
+  echo "  server   ：${SERVER_URI}" >&2
+  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
+  echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
+  echo "  tun-host ：no（已强制写入命令行参数）" >&2
+  echo >&2
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}" >&2
 }
 
 do_show_info() {
-  if [[ ! -d "$APP_DIR" ]]; then
-    die "未检测到 ${APP_DIR} 目录，似乎尚未安装 openppp2。"
-  fi
+  [[ -d "$APP_DIR" ]] || die "未检测到 ${APP_DIR} 目录，似乎尚未安装 openppp2。"
   cd "$APP_DIR"
 
   local found=0
@@ -753,9 +747,8 @@ do_show_info() {
   fi
 }
 
-# ====== 选项 5：删除实例/配置（重点）======
+# ====== 选项 5：删除实例/配置（修复版）======
 
-# 全局数组：可删除配置列表
 CLIENT_CFG_LIST=()
 
 list_client_cfgs() {
@@ -775,22 +768,21 @@ list_client_cfgs() {
 print_client_cfgs() {
   local i=1
   for f in "${CLIENT_CFG_LIST[@]}"; do
-    echo "  $i) $f"
+    echo "  $i) $f" >&2
     i=$((i+1))
   done
 }
 
-# 从 compose 文件中找到“哪个 service 使用了这个 cfg”
+# 更强的 service 定位：匹配 volume 行中出现 "./cfg"
 find_service_by_cfg() {
   local cfg="$1"
   awk -v cfg="$cfg" '
     BEGIN{svc=""}
     /^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$/ {svc=$1; sub(":", "", svc)}
-    $0 ~ ("[.]/" cfg ":") { if (svc!="") { print svc; exit } }
+    index($0, "./" cfg) > 0 { if (svc!="") { print svc; exit } }
   ' "$COMPOSE_FILE"
 }
 
-# 从 compose 中删除某个 service 块（从 "  svc:" 到下一条 "  xxxx:" 或 EOF）
 remove_service_block() {
   local svc="$1"
   local tmp
@@ -807,21 +799,20 @@ remove_service_block() {
   mv "$tmp" "$COMPOSE_FILE"
 }
 
+# ✅ 修复：所有交互输出都去 stderr；stdout 只 echo 最终文件名
 select_cfg_interactive() {
-  # 已有 CLIENT_CFG_LIST
-  echo
-  echo "可删除的客户端配置文件列表："
+  echo >&2
+  echo "可删除的客户端配置文件列表：" >&2
   print_client_cfgs
-  echo
-  echo "你可以："
-  echo "  - 输入编号（例如 2）"
-  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）"
-  echo
+  echo >&2
+  echo "你可以：" >&2
+  echo "  - 输入编号（例如 2）" >&2
+  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）" >&2
+  echo >&2
 
   local sel=""
   prompt sel "请输入要删除的配置（编号/名称/关键词）" ""
 
-  # 1) 编号
   if [[ "$sel" =~ ^[0-9]+$ ]]; then
     local idx="$sel"
     if (( idx >= 1 && idx <= ${#CLIENT_CFG_LIST[@]} )); then
@@ -831,13 +822,11 @@ select_cfg_interactive() {
     die "编号无效。"
   fi
 
-  # 2) 精确匹配文件名
   if [[ -f "${APP_DIR}/${sel}" ]]; then
     echo "$sel"
     return 0
   fi
 
-  # 3) 模糊匹配（包含关键词）
   local -a matches=()
   local f
   for f in "${CLIENT_CFG_LIST[@]}"; do
@@ -852,11 +841,11 @@ select_cfg_interactive() {
   fi
 
   if [[ "${#matches[@]}" -gt 1 ]]; then
-    echo
+    echo >&2
     warn "匹配到多个配置，请输入更精确的名称："
     local i=1
     for f in "${matches[@]}"; do
-      echo "  $i) $f"
+      echo "  $i) $f" >&2
       i=$((i+1))
     done
     die "请重新运行选项 5 并输入更精确的关键词/文件名。"
@@ -887,16 +876,16 @@ do_delete_client() {
   fi
 
   local cfg
-  cfg="$(select_cfg_interactive)"
+  cfg="$(select_cfg_interactive)"   # ✅ 现在 cfg 是干净的（只会是一行文件名）
 
-  local svc
+  local svc=""
   svc="$(find_service_by_cfg "$cfg" || true)"
 
-  echo
-  echo "即将删除："
-  echo "  配置文件：$cfg"
-  echo "  对应服务：${svc:-（未能自动定位）}"
-  echo
+  echo >&2
+  echo "即将删除：" >&2
+  echo "  配置文件：$cfg" >&2
+  echo "  对应服务：${svc:-（未能自动定位）}" >&2
+  echo >&2
 
   local yesno
   prompt yesno "确认删除？输入 yes 继续" "no"
@@ -915,7 +904,7 @@ do_delete_client() {
 
     rm -f "ip-${svc}.txt" "dns-rules-${svc}.txt" >/dev/null 2>&1 || true
   else
-    warn "未能定位 service，只删除配置文件本身。若该实例仍会被拉起，请检查 docker-compose.yml 手动移除对应 service。"
+    warn "未能定位 service：将仅删除配置文件本身（若实例仍会被拉起，请手动从 docker-compose.yml 移除对应 service）。"
   fi
 
   info "删除配置文件：$cfg"
@@ -930,9 +919,7 @@ do_delete_client() {
 
 check_env_supported() {
   is_root || die "请使用 root 身份执行本脚本，例如：sudo bash $0"
-  if [[ ! -f /etc/debian_version ]]; then
-    warn "未检测到 /etc/debian_version，系统可能不是标准 Debian/Ubuntu。"
-  fi
+  [[ -f /etc/debian_version ]] || warn "未检测到 /etc/debian_version，系统可能不是标准 Debian/Ubuntu。"
 }
 
 main() {
