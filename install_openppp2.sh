@@ -351,4 +351,500 @@ EOF
 
 setup_systemd_weekly_update() {
   if ! has_systemd; then
-    warn "未检测到 systemd，无法配置 systemd 定时更新。你可以使用 crontab 定时执行 /usr/local/bin/ope
+    warn "未检测到 systemd，无法配置 systemd 定时更新。你可以使用 crontab 定时执行 /usr/local/bin/openppp2-update.sh。"
+    return 0
+  fi
+
+  echo
+  info "配置 systemd 每周自动更新（拉取最新镜像并重启 openppp2 容器）"
+  echo "说明：OnCalendar 示例："
+  echo "  Sun *-*-* 03:00:00  -> 每周日 03:00 执行"
+  echo "  Mon *-*-* 04:30:00  -> 每周一 04:30 执行"
+  local oncal
+  prompt oncal "请输入定时任务的 OnCalendar 表达式" "${DEFAULT_ONCAL}"
+
+  cat >/usr/local/bin/openppp2-update.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/openppp2
+
+if docker compose version >/dev/null 2>&1; then
+  dc=(docker compose)
+else
+  dc=(docker-compose)
+fi
+
+"${dc[@]}" pull
+"${dc[@]}" up -d --remove-orphans
+EOF
+  chmod +x /usr/local/bin/openppp2-update.sh
+
+  cat >/etc/systemd/system/openppp2-update.service <<'EOF'
+[Unit]
+Description=Update openppp2 container images
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openppp2-update.sh
+EOF
+
+  cat >/etc/systemd/system/openppp2-update.timer <<EOF
+[Unit]
+Description=Run openppp2 update weekly
+
+[Timer]
+OnCalendar=${oncal}
+Persistent=true
+Unit=openppp2-update.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now openppp2-update.timer
+
+  info "已启用 systemd 定时更新：openppp2-update.timer"
+}
+
+health_check() {
+  local role=""
+  if [[ -f "${APP_DIR}/.role" ]]; then
+    role="$(cat "${APP_DIR}/.role" 2>/dev/null || echo "")"
+  fi
+
+  local svc="openppp2"
+  if [[ "$role" == "client" ]]; then
+    if [[ -f "${APP_DIR}/.client_main_service" ]]; then
+      svc="$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo "openppp2")"
+    fi
+  fi
+
+  if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
+    if [[ "$role" == "client" ]]; then
+      warn "openppp2 主客户端容器未处于运行状态（预期容器名：${svc}）。请检查日志："
+    else
+      warn "openppp2 容器未处于运行状态。请检查日志："
+    fi
+    echo "  cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}"
+    echo
+    warn "如果看到 “io_uring_queue_init: Operation not permitted” 之类错误："
+    warn "  - 说明镜像为 io-uring 版本，在某些内核/安全策略下会被限制。"
+    warn "  - 请换用 non-io-uring 的 openppp2 镜像或其它 tag。"
+    exit 1
+  fi
+}
+
+do_install() {
+  ensure_docker_stack
+
+  echo "=============================="
+  echo "  请选择安装/部署角色："
+  echo "    1) 服务端（Server）"
+  echo "    2) 客户端（Client）"
+  echo "=============================="
+  local ROLE
+  prompt ROLE "请输入数字选择（1 或 2）" "1"
+
+  local IMAGE BASE_URL
+  prompt IMAGE "请输入镜像地址" "${DEFAULT_IMAGE}"
+  prompt BASE_URL "请输入基准配置文件 URL（appsettings.base.json 的 raw 链接）" "${DEFAULT_BASE_CFG_URL}"
+
+  download_base_cfg "$BASE_URL"
+  cd "$APP_DIR"
+
+  docker rm -f watchtower >/dev/null 2>&1 || true
+
+  if [[ "$ROLE" == "1" ]]; then
+    # 服务端
+    local APP_CFG_NAME
+    prompt APP_CFG_NAME "请输入要生成的服务端配置文件名称（例如 appsettings.json 或 appsettings-server.json）" "appsettings.json"
+
+    local SERVER_PUBLIC_IP
+    local autoip=""
+    autoip="$(curl_retry -sS https://api.ipify.org 2>/dev/null || true)"
+    if [[ -n "$autoip" ]]; then
+      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址（用于配置 ip.public / ip.interface）" "$autoip"
+    else
+      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址（用于配置 ip.public / ip.interface）" ""
+    fi
+
+    jq --arg ip "$SERVER_PUBLIC_IP" \
+      '.ip.public=$ip | .ip.interface=$ip' \
+      appsettings.base.json > "$APP_CFG_NAME"
+
+    write_compose_server "$IMAGE" "$APP_CFG_NAME"
+
+    echo "server" > "${APP_DIR}/.role"
+
+  elif [[ "$ROLE" == "2" ]]; then
+    # 客户端
+    [[ -c /dev/net/tun ]] || die "/dev/net/tun 不存在：当前宿主机不支持 TUN（或未开启），client 模式无法运行。"
+
+    local APP_CFG_NAME
+    prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings.json 或 appsettings-HK.json）" "appsettings.json"
+
+    local MAIN_SERVICE_NAME
+    prompt MAIN_SERVICE_NAME "请输入主客户端实例名称（容器/服务名）" "openppp2"
+
+    local SERVER_IP SERVER_PORT guid lan nic gw netinfo
+    prompt SERVER_IP "请输入服务端 IP（用于 client.server，例如 1.2.3.4）" ""
+    prompt SERVER_PORT "请输入服务端端口（用于 client.server，例如 20000）" "20000"
+
+    guid="$(gen_guid)"
+    netinfo="$(detect_net)"
+    lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
+    nic="${netinfo%%|*}"; gw="${netinfo#*|}"
+
+    if [[ -z "${lan:-}" ]]; then
+      warn "未能自动检测到客户端内网 IP（src），请手动输入。"
+      prompt lan "请输入客户端内网 IP（用于 http-proxy/socks-proxy bind，例如 192.168.1.100）" ""
+    else
+      info "检测到客户端内网 IP：${lan}"
+    fi
+
+    if [[ -z "${nic:-}" ]]; then
+      warn "未能自动检测到默认网卡名（dev），请手动输入。"
+      prompt nic "请输入默认网卡名（例如 eth0、ens3、ens192）" ""
+    else
+      info "检测到默认网卡：${nic}"
+    fi
+
+    if [[ -z "${gw:-}" ]]; then
+      warn "未能自动检测到默认网关（via），请手动输入。"
+      prompt gw "请输入默认网关（例如 192.168.1.1）" ""
+    else
+      info "检测到默认网关：${gw}"
+    fi
+
+    local SERVER_URI="ppp://${SERVER_IP}:${SERVER_PORT}/"
+
+    local MAIN_TUN_HOST_CHOICE MAIN_TUN_HOST_FLAG
+    prompt MAIN_TUN_HOST_CHOICE "是否将该客户端设置为默认出网（全局代理）？(y/n)" "y"
+    if [[ "$MAIN_TUN_HOST_CHOICE" =~ ^[Yy]$ ]]; then
+      MAIN_TUN_HOST_FLAG="yes"
+    else
+      MAIN_TUN_HOST_FLAG="no"
+    fi
+
+    # 为 HTTP/SOCKS 随机分配端口
+    local HTTP_PORT SOCKS_PORT
+    HTTP_PORT="$(random_free_port)"
+    SOCKS_PORT="$(random_free_port)"
+    while [[ "$SOCKS_PORT" == "$HTTP_PORT" ]]; do
+      SOCKS_PORT="$(random_free_port)"
+    done
+
+    jq --arg srv "$SERVER_URI" \
+      --arg guid "$guid" \
+      --arg lan "$lan" \
+      --argjson hport "$HTTP_PORT" \
+      --argjson sport "$SOCKS_PORT" \
+      ' .client.server=$srv
+        | .client.guid=$guid
+        | .client["http-proxy"].bind=$lan
+        | .client["socks-proxy"].bind=$lan
+        | .client["http-proxy"].port=$hport
+        | .client["socks-proxy"].port=$sport ' \
+      appsettings.base.json > "$APP_CFG_NAME"
+
+    [[ -f ip.txt ]] || : > ip.txt
+    [[ -f dns-rules.txt ]] || : > dns-rules.txt
+
+    enable_ip_forward_host
+
+    local main_tun_name="ppp0"
+    local tun_ip="10.0.0.2"
+    local tun_gw="10.0.0.1"
+
+    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$MAIN_TUN_HOST_FLAG" "$main_tun_name" "$tun_ip" "$tun_gw"
+
+    echo "client" > "${APP_DIR}/.role"
+    echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
+
+    echo
+    echo "当前客户端配置信息："
+    echo "  配置文件：${APP_CFG_NAME}"
+    echo "  server   ：${SERVER_URI}"
+    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
+    echo "  HTTP     ：${lan}:${HTTP_PORT}"
+  else
+    die "角色选择错误，只能输入 1 或 2。"
+  fi
+
+  echo
+  info "开始启动 openppp2 容器..."
+  cd "$APP_DIR"
+  compose up -d --remove-orphans
+
+  health_check
+  setup_systemd_weekly_update
+
+  echo
+  echo "===== 安装完成 ====="
+  echo "配置目录：${APP_DIR}"
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
+  echo "查看定时器（若使用 systemd）：systemctl list-timers --all | grep openppp2"
+  echo "手动触发更新（若使用 systemd）：systemctl start openppp2-update.service"
+}
+
+do_uninstall() {
+  info "开始卸载 openppp2（不卸载 Docker 本身）..."
+
+  info "停止并移除可能存在的 systemd 定时更新..."
+  if has_systemd; then
+    systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
+  fi
+  rm -f /etc/systemd/system/openppp2-update.timer \
+        /etc/systemd/system/openppp2-update.service \
+        /usr/local/bin/openppp2-update.sh >/dev/null 2>&1 || true
+  if has_systemd; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
+
+  if need_cmd docker; then
+    docker rm -f watchtower >/dev/null 2>&1 || true
+  fi
+
+  if [[ -d "$APP_DIR" ]] && need_cmd docker; then
+    cd "$APP_DIR"
+    detect_compose >/dev/null 2>&1 || true
+    if [[ -n "$COMPOSE_KIND" ]]; then
+      info "停止并删除 openppp2 相关容器..."
+      compose down --remove-orphans >/dev/null 2>&1 || true
+    else
+      docker rm -f openppp2 >/dev/null 2>&1 || true
+    fi
+  fi
+
+  info "删除目录 ${APP_DIR} ..."
+  rm -rf "$APP_DIR"
+
+  rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
+  sysctl --system >/dev/null 2>&1 || true
+
+  echo "卸载完成（Docker 本身未卸载）。"
+}
+
+# 新增 openppp2 客户端实例（多隧道）
+do_add_client() {
+  ensure_docker_stack
+
+  if [[ ! -d "$APP_DIR" ]] || [[ ! -f "$COMPOSE_FILE" ]]; then
+    die "未检测到已有的 openppp2 安装，请先使用 1) 安装 openppp2（client）后再使用本功能。"
+  fi
+
+  local role="unknown"
+  if [[ -f "${APP_DIR}/.role" ]]; then
+    role="$(cat "${APP_DIR}/.role" 2>/dev/null || echo unknown)"
+  fi
+
+  if [[ "$role" != "client" ]]; then
+    die "当前安装角色不是客户端（可能是服务端），根据要求禁止使用 3) 新增 openppp2。"
+  fi
+
+  cd "$APP_DIR"
+
+  if [[ ! -f appsettings.base.json ]]; then
+    local BASE_URL
+    prompt BASE_URL "未找到 appsettings.base.json，请输入基准配置文件 URL（appsettings.base.json 的 raw 链接）" "${DEFAULT_BASE_CFG_URL}"
+    download_base_cfg "$BASE_URL"
+  fi
+
+  local IMAGE
+  IMAGE="$(awk '/image:/ {print $2; exit}' "$COMPOSE_FILE" 2>/dev/null || true)"
+  if [[ -z "$IMAGE" ]]; then
+    prompt IMAGE "未能从 docker-compose.yml 中解析出镜像地址，请输入镜像地址" "${DEFAULT_IMAGE}"
+  fi
+
+  local SERVER_IP SERVER_PORT guid lan nic gw netinfo
+  prompt SERVER_IP "请输入新增客户端要连接的服务端 IP（例如 1.2.3.4）" ""
+  prompt SERVER_PORT "请输入新增客户端要连接的服务端端口（例如 20000）" "20000"
+
+  guid="$(gen_guid)"
+  netinfo="$(detect_net)"
+  lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
+  nic="${netinfo%%|*}"; gw="${netinfo#*|}"
+
+  if [[ -z "${lan:-}" ]]; then
+    warn "未能自动检测到客户端内网 IP（src），请手动输入。"
+    prompt lan "请输入客户端内网 IP（用于 http-proxy/socks-proxy bind，例如 192.168.1.100）" ""
+  else
+    info "检测到客户端内网 IP：${lan}"
+  fi
+
+  if [[ -z "${nic:-}" ]]; then
+    warn "未能自动检测到默认网卡名（dev），请手动输入。"
+    prompt nic "请输入默认网卡名（例如 eth0、ens3、ens192）" ""
+  else
+    info "检测到默认网卡：${nic}"
+  fi
+
+  if [[ -z "${gw:-}" ]]; then
+    warn "未能自动检测到默认网关（via），请手动输入。"
+    prompt gw "请输入默认网关（例如 192.168.1.1）" ""
+  else
+    info "检测到默认网关：${gw}"
+  fi
+
+  local SERVER_URI="ppp://${SERVER_IP}:${SERVER_PORT}/"
+
+  local idx=2
+  while grep -q "openppp2-${idx}:" "$COMPOSE_FILE" 2>/dev/null; do
+    idx=$((idx+1))
+  done
+  local default_svc="openppp2-${idx}"
+
+  local SVC_NAME
+  prompt SVC_NAME "请输入新客户端实例名称（容器/服务名）" "$default_svc"
+
+  if grep -qE "^[[:space:]]${SVC_NAME}:" "$COMPOSE_FILE" 2>/dev/null; then
+    die "服务名 ${SVC_NAME} 已在 docker-compose.yml 中存在，请换一个名称后重试。"
+  fi
+
+  local cfg_default="appsettings-${SVC_NAME}.json"
+  local CFG_NAME
+  prompt CFG_NAME "请输入该客户端配置文件名称" "$cfg_default"
+
+  local ipfile="ip-${SVC_NAME}.txt"
+  local dnsfile="dns-rules-${SVC_NAME}.txt"
+
+  local TUN_HOST_CHOICE TUN_HOST_FLAG
+  prompt TUN_HOST_CHOICE "是否将该客户端设置为默认出网（全局代理）？(y/n)" "n"
+  if [[ "$TUN_HOST_CHOICE" =~ ^[Yy]$ ]]; then
+    TUN_HOST_FLAG="yes"
+  else
+    TUN_HOST_FLAG="no"
+  fi
+
+  local tun_idx="$idx"
+  local tun_ip="10.0.${tun_idx}.2"
+  local tun_gw="10.0.${tun_idx}.1"
+  local tun_name="ppp${tun_idx}"
+
+  # 为 HTTP/SOCKS 随机分配端口
+  local HTTP_PORT SOCKS_PORT
+  HTTP_PORT="$(random_free_port)"
+  SOCKS_PORT="$(random_free_port)"
+  while [[ "$SOCKS_PORT" == "$HTTP_PORT" ]]; do
+    SOCKS_PORT="$(random_free_port)"
+  done
+
+  jq --arg srv "$SERVER_URI" \
+    --arg guid "$guid" \
+    --arg lan "$lan" \
+    --argjson hport "$HTTP_PORT" \
+    --argjson sport "$SOCKS_PORT" \
+    ' .client.server=$srv
+      | .client.guid=$guid
+      | .client["http-proxy"].bind=$lan
+      | .client["socks-proxy"].bind=$lan
+      | .client["http-proxy"].port=$hport
+      | .client["socks-proxy"].port=$sport ' \
+    appsettings.base.json > "${CFG_NAME}"
+
+  [[ -f "$ipfile" ]] || : > "$ipfile"
+  [[ -f "$dnsfile" ]] || : > "$dnsfile"
+
+  enable_ip_forward_host
+
+  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${TUN_HOST_FLAG}" "${tun_name}" "${tun_ip}" "${tun_gw}"
+
+  info "启动新增客户端实例：${SVC_NAME} ..."
+  compose up -d --remove-orphans "${SVC_NAME}"
+
+  echo
+  echo "当前新增客户端配置信息："
+  echo "  配置文件：${CFG_NAME}"
+  echo "  server   ：${SERVER_URI}"
+  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
+  echo "  HTTP     ：${lan}:${HTTP_PORT}"
+  echo
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
+}
+
+# 查看所有客户端配置文件的信息（server + SOCKS/HTTP）
+do_show_info() {
+  if [[ ! -d "$APP_DIR" ]]; then
+    die "未检测到 ${APP_DIR} 目录，似乎尚未安装 openppp2。"
+  fi
+
+  cd "$APP_DIR"
+
+  local found=0
+  for f in appsettings*.json; do
+    [[ -f "$f" ]] || continue
+    [[ "$f" == "appsettings.base.json" ]] && continue
+
+    local server socks_bind socks_port http_bind http_port
+    server="$(jq -r '(.client.server // empty)' "$f")"
+    [[ -z "$server" ]] && continue
+
+    socks_bind="$(jq -r '(.client["socks-proxy"].bind // "")' "$f")"
+    socks_port="$(jq -r '(.client["socks-proxy"].port // "")' "$f")"
+    http_bind="$(jq -r '(.client["http-proxy"].bind // "")' "$f")"
+    http_port="$(jq -r '(.client["http-proxy"].port // "")' "$f")"
+
+    found=1
+    echo "----------------------------------------"
+    echo "配置文件：$f"
+    echo "  client.server ：$server"
+    if [[ -n "$socks_bind" || -n "$socks_port" ]]; then
+      echo "  SOCKS5        ：${socks_bind}:${socks_port}"
+    else
+      echo "  SOCKS5        ：未配置"
+    fi
+    if [[ -n "$http_bind" || -n "$http_port" ]]; then
+      echo "  HTTP          ：${http_bind}:${http_port}"
+    else
+      echo "  HTTP          ：未配置"
+    fi
+  done
+
+  if [[ "$found" -eq 0 ]]; then
+    echo "未在 ${APP_DIR} 中找到包含 client.server 的客户端配置文件。"
+  else
+    echo "----------------------------------------"
+    echo "以上为当前所有客户端配置的 server / SOCKS5 / HTTP 信息。"
+  fi
+}
+
+check_env_supported() {
+  is_root || die "请使用 root 身份执行本脚本，例如：sudo bash $0"
+
+  if ! need_cmd apt-get; then
+    warn "未检测到 apt-get，本脚本当前假设你已经手动安装好 Docker / compose / 常用工具。"
+  fi
+
+  if [[ ! -f /etc/debian_version ]]; then
+    warn "未检测到 /etc/debian_version，系统可能不是标准 Debian/Ubuntu。"
+    warn "继续运行可能会失败或产生不可预期行为。"
+  fi
+}
+
+main() {
+  check_env_supported
+
+  echo "=============================="
+  echo "  openppp2 一键部署脚本"
+  echo "=============================="
+  echo "请选择操作："
+  echo "  1) 安装 openppp2"
+  echo "  2) 卸载 openppp2"
+  echo "  3) 新增 openppp2 客户端实例"
+  echo "  4) 查看客户端配置和代理信息"
+  echo "=============================="
+
+  local ACTION
+  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4）" "1"
+
+  case "$ACTION" in
+    1) do_install ;;
+    2) do_uninstall ;;
+    3) do_add_client ;;
+    4) do_show_info ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4。" ;;
+  esac
+}
+
+main "$@"
