@@ -621,7 +621,7 @@ do_uninstall() {
   rm -rf "$APP_DIR"
 
   rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
-  sysctl --system >/dev/null 2>&1 || true
+  sysctl --系统 >/dev/null 2>&1 || true
 
   echo "卸载完成（Docker 本身未卸载）。"
 }
