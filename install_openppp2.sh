@@ -44,7 +44,6 @@ prompt_port() {
   local p=""
   while :; do
     prompt p "$__msg" "$__def"
-    # 纯数字校验
     if [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )); then
       printf -v "$__var" "%s" "$p"
       return 0
@@ -750,8 +749,183 @@ do_show_info() {
     echo "未找到包含 client.server 的客户端配置文件。"
   else
     echo "----------------------------------------"
-    echo "以上为当前所有客户端配置的 server / SOCKS5 / HTTP 信息。"
+    echo "以上为当前所有客户端配置的 server / SOCKS5 / HTTP 信息"
   fi
+}
+
+# ====== 选项 5：删除实例/配置（重点）======
+
+# 全局数组：可删除配置列表
+CLIENT_CFG_LIST=()
+
+list_client_cfgs() {
+  cd "$APP_DIR"
+  CLIENT_CFG_LIST=()
+  local f
+  for f in appsettings*.json; do
+    [[ -f "$f" ]] || continue
+    [[ "$f" == "appsettings.base.json" ]] && continue
+    if jq -e '.client.server? // empty' "$f" >/dev/null 2>&1; then
+      CLIENT_CFG_LIST+=("$f")
+    fi
+  done
+  [[ "${#CLIENT_CFG_LIST[@]}" -gt 0 ]]
+}
+
+print_client_cfgs() {
+  local i=1
+  for f in "${CLIENT_CFG_LIST[@]}"; do
+    echo "  $i) $f"
+    i=$((i+1))
+  done
+}
+
+# 从 compose 文件中找到“哪个 service 使用了这个 cfg”
+find_service_by_cfg() {
+  local cfg="$1"
+  awk -v cfg="$cfg" '
+    BEGIN{svc=""}
+    /^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$/ {svc=$1; sub(":", "", svc)}
+    $0 ~ ("[.]/" cfg ":") { if (svc!="") { print svc; exit } }
+  ' "$COMPOSE_FILE"
+}
+
+# 从 compose 中删除某个 service 块（从 "  svc:" 到下一条 "  xxxx:" 或 EOF）
+remove_service_block() {
+  local svc="$1"
+  local tmp
+  tmp="$(mktemp)"
+
+  awk -v svc="$svc" '
+    BEGIN{inblock=0}
+    $0 ~ "^[[:space:]]{2}" svc ":[[:space:]]*$" {inblock=1; next}
+    inblock==1 && $0 ~ "^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$" {inblock=0}
+    inblock==1 {next}
+    {print}
+  ' "$COMPOSE_FILE" > "$tmp"
+
+  mv "$tmp" "$COMPOSE_FILE"
+}
+
+select_cfg_interactive() {
+  # 已有 CLIENT_CFG_LIST
+  echo
+  echo "可删除的客户端配置文件列表："
+  print_client_cfgs
+  echo
+  echo "你可以："
+  echo "  - 输入编号（例如 2）"
+  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）"
+  echo
+
+  local sel=""
+  prompt sel "请输入要删除的配置（编号/名称/关键词）" ""
+
+  # 1) 编号
+  if [[ "$sel" =~ ^[0-9]+$ ]]; then
+    local idx="$sel"
+    if (( idx >= 1 && idx <= ${#CLIENT_CFG_LIST[@]} )); then
+      echo "${CLIENT_CFG_LIST[$((idx-1))]}"
+      return 0
+    fi
+    die "编号无效。"
+  fi
+
+  # 2) 精确匹配文件名
+  if [[ -f "${APP_DIR}/${sel}" ]]; then
+    echo "$sel"
+    return 0
+  fi
+
+  # 3) 模糊匹配（包含关键词）
+  local -a matches=()
+  local f
+  for f in "${CLIENT_CFG_LIST[@]}"; do
+    if [[ "$f" == *"$sel"* ]]; then
+      matches+=("$f")
+    fi
+  done
+
+  if [[ "${#matches[@]}" -eq 1 ]]; then
+    echo "${matches[0]}"
+    return 0
+  fi
+
+  if [[ "${#matches[@]}" -gt 1 ]]; then
+    echo
+    warn "匹配到多个配置，请输入更精确的名称："
+    local i=1
+    for f in "${matches[@]}"; do
+      echo "  $i) $f"
+      i=$((i+1))
+    done
+    die "请重新运行选项 5 并输入更精确的关键词/文件名。"
+  fi
+
+  die "未找到匹配的配置文件：$sel"
+}
+
+do_delete_client() {
+  ensure_docker_stack
+
+  [[ -d "$APP_DIR" ]] || die "未检测到 ${APP_DIR}，请先安装。"
+  [[ -f "$COMPOSE_FILE" ]] || die "未找到 ${COMPOSE_FILE}，请先安装。"
+
+  local role="unknown"
+  if [[ -f "${APP_DIR}/.role" ]]; then
+    role="$(cat "${APP_DIR}/.role" 2>/dev/null || echo unknown)"
+  fi
+  if [[ "$role" != "client" ]]; then
+    die "当前环境不是 client（或未按脚本安装），为安全起见不提供删除。"
+  fi
+
+  cd "$APP_DIR"
+
+  if ! list_client_cfgs; then
+    echo "未找到可删除的客户端配置文件。"
+    return 0
+  fi
+
+  local cfg
+  cfg="$(select_cfg_interactive)"
+
+  local svc
+  svc="$(find_service_by_cfg "$cfg" || true)"
+
+  echo
+  echo "即将删除："
+  echo "  配置文件：$cfg"
+  echo "  对应服务：${svc:-（未能自动定位）}"
+  echo
+
+  local yesno
+  prompt yesno "确认删除？输入 yes 继续" "no"
+  if [[ "$yesno" != "yes" ]]; then
+    echo "已取消。"
+    return 0
+  fi
+
+  if [[ -n "$svc" ]]; then
+    info "停止并移除 service/container：$svc"
+    compose stop "$svc" >/dev/null 2>&1 || true
+    compose rm -f "$svc" >/dev/null 2>&1 || true
+
+    info "从 docker-compose.yml 移除 service：$svc"
+    remove_service_block "$svc"
+
+    rm -f "ip-${svc}.txt" "dns-rules-${svc}.txt" >/dev/null 2>&1 || true
+  else
+    warn "未能定位 service，只删除配置文件本身。若该实例仍会被拉起，请检查 docker-compose.yml 手动移除对应 service。"
+  fi
+
+  info "删除配置文件：$cfg"
+  rm -f "$cfg" >/dev/null 2>&1 || true
+
+  info "清理孤儿并刷新运行状态..."
+  compose up -d --remove-orphans >/dev/null 2>&1 || true
+
+  echo
+  echo "删除完成。建议用 4) 查看客户端配置和代理信息 确认结果。"
 }
 
 check_env_supported() {
@@ -772,17 +946,19 @@ main() {
   echo "  2) 卸载 openppp2"
   echo "  3) 新增 openppp2 客户端实例"
   echo "  4) 查看客户端配置和代理信息"
+  echo "  5) 删除客户端实例/配置（避免重启反复拉起）"
   echo "=============================="
 
   local ACTION
-  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4）" "1"
+  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5）" "1"
 
   case "$ACTION" in
     1) do_install ;;
     2) do_uninstall ;;
     3) do_add_client ;;
     4) do_show_info ;;
-    *) die "输入错误，只能是 1 / 2 / 3 / 4。" ;;
+    5) do_delete_client ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
   esac
 }
 
