@@ -1029,7 +1029,7 @@ do_install() {
     local HTTP_PORT SOCKS_PORT
     HTTP_PORT="$(random_free_port)"
     SOCKS_PORT="$(random_free_port)"
-    while [[ "$HTTP_PORT" ]]; do
+    while [[ "$SOCKS_PORT" == "$HTTP_PORT" ]]; do
       SOCKS_PORT="$(random_free_port)"
     done
 
@@ -1236,7 +1236,7 @@ do_add_client() {
 
   enable_ip_forward_host
 
-  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tgw}"
+  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}"
 
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
@@ -1480,7 +1480,11 @@ main() {
 
   case "$ACTION" in
     1) do_install ;;
-    2) do_uninstall ;; "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
+    2) do_uninstall ;;
+    3) do_add_client ;;
+    4) do_show_info ;;
+    5) do_delete_client ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
   esac
 }
 
