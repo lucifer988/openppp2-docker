@@ -3,14 +3,13 @@ set -euo pipefail
 
 APP_DIR="/opt/openppp2"
 COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
+SECCOMP_FILE="${APP_DIR}/seccomp-openppp2.json"
 
 DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
 DEFAULT_BASE_CFG_URL="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
 DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
-# 关键修复：为 io_uring 放开容器 seccomp/apparmor 限制
-# （避免：io_uring_queue_init: Operation not permitted）
-DEFAULT_SECURITY_OPT_SECCOMP="seccomp=unconfined"
+# 使用自定义 seccomp 配置（方案一：仅放开必要的 io_uring 系统调用）
 DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
 COMPOSE_KIND="" # "docker compose" or "docker-compose"
@@ -153,13 +152,11 @@ install_docker_from_debian() {
 }
 
 install_docker_compose_plugin_if_missing() {
-  # 目标：确保 "docker compose" 可用（推荐），否则提供 docker-compose（兼容）
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
     return 0
   fi
 
   if need_cmd apt-get; then
-    # 优先安装 compose 插件（Debian/Ubuntu 常见包名）
     apt_install docker-compose-plugin >/dev/null 2>&1 || true
   fi
 
@@ -167,7 +164,6 @@ install_docker_compose_plugin_if_missing() {
     return 0
   fi
 
-  # 兜底：安装老版 docker-compose
   if ! need_cmd docker-compose && need_cmd apt-get; then
     apt_install docker-compose >/dev/null 2>&1 || true
   fi
@@ -183,7 +179,6 @@ ensure_docker_stack() {
   else
     if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
       warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
-      # 直接用 docker.io（你实际环境验证过可用）
       install_docker_from_debian || warn "通过 apt 安装 docker.io 失败，请手动安装 Docker。"
     else
       warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
@@ -283,17 +278,486 @@ EOF
   fi
 }
 
+# 生成自定义 seccomp 配置文件（方案一：仅放开必要的 io_uring 系统调用）
+generate_seccomp_profile() {
+  local seccomp_file="$1"
+  info "生成自定义 seccomp 配置文件：${seccomp_file}"
+  
+  cat > "$seccomp_file" <<'EOF'
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "defaultErrnoRet": 1,
+  "archMap": [
+    {
+      "architecture": "SCMP_ARCH_X86_64",
+      "subArchitectures": [
+        "SCMP_ARCH_X86",
+        "SCMP_ARCH_X32"
+      ]
+    },
+    {
+      "architecture": "SCMP_ARCH_AARCH64",
+      "subArchitectures": [
+        "SCMP_ARCH_ARM"
+      ]
+    }
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "accept",
+        "accept4",
+        "access",
+        "adjtimex",
+        "alarm",
+        "bind",
+        "brk",
+        "capget",
+        "capset",
+        "chdir",
+        "chmod",
+        "chown",
+        "chown32",
+        "clock_adjtime",
+        "clock_adjtime64",
+        "clock_getres",
+        "clock_getres_time64",
+        "clock_gettime",
+        "clock_gettime64",
+        "clock_nanosleep",
+        "clock_nanosleep_time64",
+        "close",
+        "close_range",
+        "connect",
+        "copy_file_range",
+        "creat",
+        "dup",
+        "dup2",
+        "dup3",
+        "epoll_create",
+        "epoll_create1",
+        "epoll_ctl",
+        "epoll_ctl_old",
+        "epoll_pwait",
+        "epoll_pwait2",
+        "epoll_wait",
+        "epoll_wait_old",
+        "eventfd",
+        "eventfd2",
+        "execve",
+        "execveat",
+        "exit",
+        "exit_group",
+        "faccessat",
+        "faccessat2",
+        "fadvise64",
+        "fadvise64_64",
+        "fallocate",
+        "fanotify_mark",
+        "fchdir",
+        "fchmod",
+        "fchmodat",
+        "fchown",
+        "fchown32",
+        "fchownat",
+        "fcntl",
+        "fcntl64",
+        "fdatasync",
+        "fgetxattr",
+        "flistxattr",
+        "flock",
+        "fork",
+        "fremovexattr",
+        "fsetxattr",
+        "fstat",
+        "fstat64",
+        "fstatat64",
+        "fstatfs",
+        "fstatfs64",
+        "fsync",
+        "ftruncate",
+        "ftruncate64",
+        "futex",
+        "futex_time64",
+        "futimesat",
+        "getcpu",
+        "getcwd",
+        "getdents",
+        "getdents64",
+        "getegid",
+        "getegid32",
+        "geteuid",
+        "geteuid32",
+        "getgid",
+        "getgid32",
+        "getgroups",
+        "getgroups32",
+        "getitimer",
+        "getpeername",
+        "getpgid",
+        "getpgrp",
+        "getpid",
+        "getppid",
+        "getpriority",
+        "getrandom",
+        "getresgid",
+        "getresgid32",
+        "getresuid",
+        "getresuid32",
+        "getrlimit",
+        "get_robust_list",
+        "getrusage",
+        "getsid",
+        "getsockname",
+        "getsockopt",
+        "get_thread_area",
+        "gettid",
+        "gettimeofday",
+        "getuid",
+        "getuid32",
+        "getxattr",
+        "inotify_add_watch",
+        "inotify_init",
+        "inotify_init1",
+        "inotify_rm_watch",
+        "io_cancel",
+        "ioctl",
+        "io_destroy",
+        "io_getevents",
+        "io_pgetevents",
+        "io_pgetevents_time64",
+        "ioprio_get",
+        "ioprio_set",
+        "io_setup",
+        "io_submit",
+        "io_uring_enter",
+        "io_uring_register",
+        "io_uring_setup",
+        "ipc",
+        "kill",
+        "lchown",
+        "lchown32",
+        "lgetxattr",
+        "link",
+        "linkat",
+        "listen",
+        "listxattr",
+        "llistxattr",
+        "lremovexattr",
+        "lseek",
+        "lsetxattr",
+        "lstat",
+        "lstat64",
+        "madvise",
+        "membarrier",
+        "memfd_create",
+        "mincore",
+        "mkdir",
+        "mkdirat",
+        "mknod",
+        "mknodat",
+        "mlock",
+        "mlock2",
+        "mlockall",
+        "mmap",
+        "mmap2",
+        "mprotect",
+        "mq_getsetattr",
+        "mq_notify",
+        "mq_open",
+        "mq_timedreceive",
+        "mq_timedreceive_time64",
+        "mq_timedsend",
+        "mq_timedsend_time64",
+        "mq_unlink",
+        "mremap",
+        "msgctl",
+        "msgget",
+        "msgrcv",
+        "msgsnd",
+        "msync",
+        "munlock",
+        "munlockall",
+        "munmap",
+        "nanosleep",
+        "newfstatat",
+        "open",
+        "openat",
+        "openat2",
+        "pause",
+        "pipe",
+        "pipe2",
+        "poll",
+        "ppoll",
+        "ppoll_time64",
+        "prctl",
+        "pread64",
+        "preadv",
+        "preadv2",
+        "prlimit64",
+        "pselect6",
+        "pselect6_time64",
+        "pwrite64",
+        "pwritev",
+        "pwritev2",
+        "read",
+        "readahead",
+        "readlink",
+        "readlinkat",
+        "readv",
+        "recv",
+        "recvfrom",
+        "recvmmsg",
+        "recvmmsg_time64",
+        "recvmsg",
+        "remap_file_pages",
+        "removexattr",
+        "rename",
+        "renameat",
+        "renameat2",
+        "restart_syscall",
+        "rmdir",
+        "rt_sigaction",
+        "rt_sigpending",
+        "rt_sigprocmask",
+        "rt_sigqueueinfo",
+        "rt_sigreturn",
+        "rt_sigsuspend",
+        "rt_sigtimedwait",
+        "rt_sigtimedwait_time64",
+        "rt_tgsigqueueinfo",
+        "sched_getaffinity",
+        "sched_getattr",
+        "sched_getparam",
+        "sched_get_priority_max",
+        "sched_get_priority_min",
+        "sched_getscheduler",
+        "sched_rr_get_interval",
+        "sched_rr_get_interval_time64",
+        "sched_setaffinity",
+        "sched_setattr",
+        "sched_setparam",
+        "sched_setscheduler",
+        "sched_yield",
+        "seccomp",
+        "select",
+        "semctl",
+        "semget",
+        "semop",
+        "semtimedop",
+        "semtimedop_time64",
+        "send",
+        "sendfile",
+        "sendfile64",
+        "sendmmsg",
+        "sendmsg",
+        "sendto",
+        "setfsgid",
+        "setfsgid32",
+        "setfsuid",
+        "setfsuid32",
+        "setgid",
+        "setgid32",
+        "setgroups",
+        "setgroups32",
+        "setitimer",
+        "setpgid",
+        "setpriority",
+        "setregid",
+        "setregid32",
+        "setresgid",
+        "setresgid32",
+        "setresuid",
+        "setresuid32",
+        "setreuid",
+        "setreuid32",
+        "setrlimit",
+        "set_robust_list",
+        "setsid",
+        "setsockopt",
+        "set_thread_area",
+        "set_tid_address",
+        "setuid",
+        "setuid32",
+        "setxattr",
+        "shmat",
+        "shmctl",
+        "shmdt",
+        "shmget",
+        "shutdown",
+        "sigaltstack",
+        "signalfd",
+        "signalfd4",
+        "sigprocmask",
+        "sigreturn",
+        "socket",
+        "socketcall",
+        "socketpair",
+        "splice",
+        "stat",
+        "stat64",
+        "statfs",
+        "statfs64",
+        "statx",
+        "symlink",
+        "symlinkat",
+        "sync",
+        "sync_file_range",
+        "syncfs",
+        "sysinfo",
+        "tee",
+        "tgkill",
+        "time",
+        "timer_create",
+        "timer_delete",
+        "timer_getoverrun",
+        "timer_gettime",
+        "timer_gettime64",
+        "timer_settime",
+        "timer_settime64",
+        "timerfd_create",
+        "timerfd_gettime",
+        "timerfd_gettime64",
+        "timerfd_settime",
+        "timerfd_settime64",
+        "times",
+        "tkill",
+        "truncate",
+        "truncate64",
+        "ugetrlimit",
+        "umask",
+        "uname",
+        "unlink",
+        "unlinkat",
+        "utime",
+        "utimensat",
+        "utimensat_time64",
+        "utimes",
+        "vfork",
+        "vmsplice",
+        "wait4",
+        "waitid",
+        "waitpid",
+        "write",
+        "writev"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "personality"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 0,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
+    },
+    {
+      "names": [
+        "personality"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 8,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
+    },
+    {
+      "names": [
+        "personality"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 131072,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
+    },
+    {
+      "names": [
+        "personality"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 131080,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
+    },
+    {
+      "names": [
+        "personality"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 4294967295,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
+    },
+    {
+      "names": [
+        "arch_prctl"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "modify_ldt"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    },
+    {
+      "names": [
+        "clone"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 2114060288,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
+    },
+    {
+      "names": [
+        "clone3"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 38
+    }
+  ]
+}
+EOF
+  
+  info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
+}
+
 compose_header() {
   if [[ "$COMPOSE_KIND" == "docker-compose" ]]; then
     echo 'version: "3.8"'
   fi
 }
 
-# --- 核心修复：给 openppp2 容器加 unconfined，避免 io_uring EPERM 崩溃 ---
+# 使用自定义 seccomp 配置（相对路径）
 compose_security_opt_block() {
   cat <<EOF
     security_opt:
-      - ${DEFAULT_SECURITY_OPT_SECCOMP}
+      - seccomp=./seccomp-openppp2.json
       - ${DEFAULT_SECURITY_OPT_APPARMOR}
 EOF
 }
@@ -352,7 +816,6 @@ $(compose_security_opt_block)
       - "--block-quic=yes"
       - "--bypass-iplist=ip.txt"
       - "--dns-rules=dns-rules.txt"
-      - "--tun-ssmt=4/st"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
@@ -394,7 +857,6 @@ $(compose_security_opt_block)
       - "--block-quic=yes"
       - "--bypass-iplist=ip.txt"
       - "--dns-rules=dns-rules.txt"
-      - "--tun-ssmt=4/st"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
@@ -410,7 +872,7 @@ setup_systemd_weekly_update() {
   fi
 
   echo >&2
-  info "设置 systemd 每周自动更新（pull + up -d）"
+  info "设置 systemd 每周自动更新（pull +d）"
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
 
@@ -467,11 +929,9 @@ health_check_one() {
     exit 1
   fi
 
-  # 额外检查：如果有 io_uring EPERM，给出明确诊断
   if docker logs "$svc" 2>/dev/null | tail -n 200 | grep -q 'io_uring_queue_init: Operation not permitted'; then
     warn "检测到 io_uring 被拒绝（Operation not permitted）。"
-    warn "已默认写入 security_opt: seccomp=unconfined + apparmor=unconfined。"
-    warn "若仍失败，可能是宿主机虚拟化/安全策略限制 io_uring。"
+    warn "请检查 seccomp 配置文件是否正确加载。"
     echo "  查看日志：docker logs --tail=200 ${svc}" >&2
     exit 1
   fi
@@ -494,6 +954,9 @@ do_install() {
 
   download_base_cfg "$BASE_URL"
   cd "$APP_DIR"
+
+  # 生成自定义 seccomp 配置文件
+  generate_seccomp_profile "$SECCOMP_FILE"
 
   docker rm -f watchtower >/dev/null 2>&1 || true
 
@@ -619,6 +1082,8 @@ do_install() {
   echo "===== 完成 =====" >&2
   echo "配置目录：${APP_DIR}" >&2
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>" >&2
+  echo >&2
+  info "安全配置：使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
 }
 
 do_uninstall() {
@@ -639,7 +1104,7 @@ do_uninstall() {
   if [[ -d "$APP_DIR" ]] && need_cmd docker; then
     cd "$APP_DIR"
     detect_compose >/dev/null 2>&1 || true
-    if [[ -n "$COMPOSE_KIND" ]]; then
+    if [[ -n "$COMPOSE "$COMPOSE_KIND" ]]; then
       info "停止并删除容器..."
       compose down --remove-orphans >/dev/null 2>&1 || true
     else
@@ -672,6 +1137,12 @@ do_add_client() {
   fi
 
   cd "$APP_DIR"
+
+  # 确保 seccomp 配置文件存在
+  if [[ ! -f "$SECCOMP_FILE" ]]; then
+    info "未找到 seccomp 配置文件，正在生成..."
+    generate_seccomp_profile "$SECCOMP_FILE"
+  fi
 
   if [[ ! -f appsettings.base.json ]]; then
     local BASE_URL
@@ -817,7 +1288,6 @@ do_show_info() {
   fi
 }
 
-# ====== 选项 5：删除实例/配置（修复版）======
 CLIENT_CFG_LIST=()
 
 list_client_cfgs() {
@@ -972,7 +1442,7 @@ do_delete_client() {
 
     rm -f "ip-${svc}.txt" "dns-rules-${svc}.txt" >/dev/null 2>&1 || true
   else
-    warn "未能定位 service：将仅删除配置文件本身（若实例仍会被拉起，请手动从 docker-compose.yml 移除对应 service）。"
+    warn "未能定位 service：身（若实例仍会被拉起，请手动从 docker-compose.yml 移除对应 service）。"
   fi
 
   info "删除配置文件：$cfg"
