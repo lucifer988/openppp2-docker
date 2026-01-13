@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# openppp2 installer (patched)
-# - auto install docker + compose
-# - fix DOCKER_HOST/DOCKER_CONTEXT pollution and add docker info retries
-# - keep original behavior (server/client/add/show/delete/uninstall)
 set -euo pipefail
 
 APP_DIR="/opt/openppp2"
@@ -65,10 +61,12 @@ compose() {
 }
 
 detect_compose() {
+  # Prefer docker compose plugin
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
     COMPOSE_KIND="docker compose"
     return 0
   fi
+  # Fallback to legacy docker-compose
   if need_cmd docker-compose && docker-compose version >/dev/null 2>&1; then
     COMPOSE_KIND="docker-compose"
     return 0
@@ -80,6 +78,7 @@ detect_compose() {
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
+  # 保留 --no-install-recommends 但我们会显式补齐 docker-cli / docker-compose-plugin
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
 }
 
@@ -124,52 +123,15 @@ start_docker_daemon_soft() {
   fi
 }
 
-print_docker_diag() {
-  echo >&2
-  warn "Docker 诊断信息（用于排查 docker info 失败的真实原因）："
-
-  warn "环境变量（可能污染 docker 连接目标）："
-  echo "  DOCKER_HOST=${DOCKER_HOST-}" >&2
-  echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT-}" >&2
-
-  if need_cmd docker; then
-    warn "docker version："
-    (docker version || true) >&2
-
-    warn "docker context ls："
-    (docker context ls || true) >&2
-
-    warn "docker info（失败输出也打印）："
-    (docker info || true) >&2
-  fi
-
-  if has_systemd; then
-    warn "systemctl status docker："
-    (systemctl status docker --no-pager || true) >&2
-    warn "journalctl -u docker（最近 120 行）："
-    (journalctl -u docker -n 120 --no-pager || true) >&2
-  else
-    warn "无 systemd："
-    (service docker status || true) >&2
-  fi
-  echo >&2
-}
-
-# 关键修复：避免 DOCKER_HOST/DOCKER_CONTEXT 被 rootless/远端 context 污染导致 docker info 永远连错
-# 同时增加等待 dockerd 就绪的重试
 docker_daemon_ok() {
   need_cmd docker || return 1
+  docker info >/dev/null 2>&1
+}
 
-  # 清理可能污染连接的环境变量（你现场就是这种典型：daemon running 但 docker info 连错 endpoint）
-  unset DOCKER_HOST DOCKER_CONTEXT >/dev/null 2>&1 || true
-
-  # 尝试切回 default context
-  docker context use default >/dev/null 2>&1 || true
-
-  # 等待 daemon 就绪（最多 30 秒）
+wait_docker_ready() {
   local i
   for i in {1..30}; do
-    if docker info >/dev/null 2>&1; then
+    if docker_daemon_ok; then
       return 0
     fi
     sleep 1
@@ -177,61 +139,42 @@ docker_daemon_ok() {
   return 1
 }
 
-ensure_compose_stack() {
-  if detect_compose; then
-    info "已检测到 Compose：${COMPOSE_KIND}"
-    return 0
-  fi
-
-  # Debian/Ubuntu：Compose v2 通常是 docker-compose-plugin
-  if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
-    warn "未检测到 compose，尝试安装 docker-compose-plugin / docker-compose ..."
+install_compose_on_debian() {
+  # 优先安装 compose plugin（docker compose）
+  if need_cmd apt-get; then
     apt_install docker-compose-plugin >/dev/null 2>&1 || true
-    apt_install docker-compose >/dev/null 2>&1 || true
   fi
-
-  # 再检测一次
-  if detect_compose; then
-    info "已安装并检测到 Compose：${COMPOSE_KIND}"
-    return 0
-  fi
-
-  # pip 兜底（极少数源里没有 plugin/v1 包）
-  if need_cmd python3; then
-    if ! need_cmd pip3; then
-      if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
-        warn "未检测到 pip3，尝试安装 python3-pip 作为兜底..."
-        apt_install python3-pip >/dev/null 2>&1 || true
-      fi
-    fi
-    if need_cmd pip3; then
-      warn "尝试用 pip3 安装 docker-compose（兜底）..."
-      pip3 install -U docker-compose >/dev/null 2>&1 || true
-    fi
-  fi
-
-  detect_compose || die "未检测到 docker compose 或 docker-compose。请先安装 compose（推荐：apt install docker-compose-plugin）后再运行脚本。"
-  info "已安装并检测到 Compose：${COMPOSE_KIND}"
 }
 
-# 更稳健的 Docker 安装策略：
-# - 如果系统已有 download.docker.com 的 repo，优先尝试安装 docker-ce + compose plugin
-# - 否则安装 Debian 的 docker.io + compose plugin
-install_docker_via_apt() {
-  if ! (need_cmd apt-get && [[ -f /etc/debian_version ]]); then
-    return 1
-  fi
-
-  # 如果 docker-ce 在源里可用，优先用 docker-ce（通常能把 compose plugin 一并装顺）
-  if apt-cache policy docker-ce 2>/dev/null | grep -q 'Candidate:'; then
-    warn "检测到 docker-ce 可用，优先安装 docker-ce / docker-ce-cli / containerd.io / docker-compose-plugin ..."
-    apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return 1
-    return 0
-  fi
-
-  warn "未检测到 docker-ce 候选或不可用，改用 Debian 包 docker.io ..."
-  apt_install docker.io || return 1
+install_docker_stack_on_debian() {
+  # 关键修复：docker.io + docker-cli + docker-compose-plugin（不要依赖 recommends）
+  apt_install docker.io docker-cli docker-compose-plugin containerd runc >/dev/null 2>&1 || return 1
   return 0
+}
+
+print_docker_diag() {
+  warn "Docker 诊断信息（用于排查 docker info 失败的真实原因）："
+  warn "环境变量（可能污染 docker 连接目标）："
+  echo "  DOCKER_HOST=${DOCKER_HOST-}" >&2
+  echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT-}" >&2
+
+  if has_systemd; then
+    warn "systemctl status docker："
+    systemctl status docker --no-pager -l || true
+    warn "journalctl -u docker（最近 120 行）："
+    journalctl -u docker -n 120 --no-pager || true
+  else
+    warn "无 systemd，尝试 service docker status："
+    service docker status || true
+  fi
+
+  warn "docker/version/info（如果 docker CLI 存在）："
+  if need_cmd docker; then
+    docker version || true
+    docker info || true
+  else
+    warn "docker CLI 未找到（command -v docker 失败）。"
+  fi
 }
 
 ensure_docker_stack() {
@@ -242,19 +185,33 @@ ensure_docker_stack() {
   else
     if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
       warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
-      install_docker_via_apt || warn "通过 apt 安装 Docker 失败（请看上方 apt 输出）。"
+      if ! install_docker_stack_on_debian; then
+        warn "通过 apt 安装 docker.io/docker-cli/docker-compose-plugin 失败，请检查 apt 源/网络。"
+      fi
       start_docker_daemon_soft
     else
       warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
     fi
   fi
 
-  if ! docker_daemon_ok; then
+  # 等待 docker ready
+  if ! wait_docker_ready; then
     print_docker_diag
     die "Docker daemon 不可用（或 docker CLI 无法连接）。请先确保 docker info 正常后再运行脚本。"
   fi
 
-  ensure_compose_stack
+  # compose 检测：若没有 compose，尝试安装 plugin 后再探测一次
+  if ! detect_compose; then
+    if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
+      warn "未检测到 docker compose 或 docker-compose，尝试安装 docker-compose-plugin ..."
+      install_compose_on_debian
+    fi
+  fi
+
+  if ! detect_compose; then
+    die "未检测到 docker compose 或 docker-compose。请先安装 compose 后再运行脚本。"
+  fi
+
   info "已选择使用 compose：${COMPOSE_KIND}"
 }
 
@@ -362,7 +319,6 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# ✅ 已移除：--tun-mux=4 与 --tun-mux-acceleration=3
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
@@ -405,7 +361,6 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# ✅ 已移除：--tun-mux=4 与 --tun-mux-acceleration=3
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
@@ -463,7 +418,6 @@ setup_systemd_weekly_update() {
 set -euo pipefail
 cd /opt/openppp2
 
-unset DOCKER_HOST DOCKER_CONTEXT >/dev/null 2>&1 || true
 if docker compose version >/dev/null 2>&1; then
   dc=(docker compose)
 else
