@@ -102,6 +102,7 @@ EOF
 ensure_basic_tools() {
   force_apt_ipv4
   if need_cmd apt-get; then
+    # 关键工具安装失败不强制退出（某些极简系统会失败），但后续会逐项检查
     apt_install ca-certificates curl jq iproute2 gnupg >/dev/null 2>&1 || true
   fi
   need_cmd curl || die "curl 未安装成功，请手动安装 curl 后重试。"
@@ -125,6 +126,62 @@ docker_daemon_ok() {
   docker info >/dev/null 2>&1
 }
 
+print_docker_diag() {
+  echo >&2
+  warn "Docker 诊断信息（用于排查 daemon 无法启动）："
+  if need_cmd docker; then
+    (docker version || true) >&2
+  fi
+  if has_systemd; then
+    (systemctl status docker --no-pager || true) >&2
+    (journalctl -u docker -n 200 --no-pager || true) >&2
+  else
+    warn "无 systemd：请手动查看 service docker status / dockerd 日志（若有）。"
+    (service docker status || true) >&2
+  fi
+  echo >&2
+}
+
+ensure_compose_stack() {
+  # 先检测是否已有 compose
+  if detect_compose; then
+    info "已检测到 Compose：${COMPOSE_KIND}"
+    return 0
+  fi
+
+  # 没检测到：尝试安装（Debian/Ubuntu）
+  if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
+    warn "未检测到 compose，尝试安装 docker-compose-plugin / docker-compose ..."
+    # 优先 v2 plugin
+    apt_install docker-compose-plugin >/dev/null 2>&1 || true
+    # 再尝试 v1
+    apt_install docker-compose >/dev/null 2>&1 || true
+  fi
+
+  # 再检测一次
+  if detect_compose; then
+    info "已安装并检测到 Compose：${COMPOSE_KIND}"
+    return 0
+  fi
+
+  # 最后兜底：用 pip 安装 docker-compose(v1)（只在 apt 失败且有 python/pip 时）
+  if need_cmd python3; then
+    if ! need_cmd pip3; then
+      if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
+        warn "未检测到 pip3，尝试安装 python3-pip 作为 docker-compose 兜底方案..."
+        apt_install python3-pip >/dev/null 2>&1 || true
+      fi
+    fi
+    if need_cmd pip3; then
+      warn "尝试用 pip3 安装 docker-compose（兜底）..."
+      pip3 install -U docker-compose >/dev/null 2>&1 || true
+    fi
+  fi
+
+  detect_compose || die "未检测到 docker compose 或 docker-compose。请先安装 compose（推荐：apt install docker-compose-plugin）后再运行脚本。"
+  info "已安装并检测到 Compose：${COMPOSE_KIND}"
+}
+
 ensure_docker_stack() {
   ensure_basic_tools
 
@@ -133,7 +190,10 @@ ensure_docker_stack() {
   else
     if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
       warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 docker.io ..."
-      apt_install docker.io >/dev/null 2>&1 || warn "通过 apt 安装 docker.io 失败，请参考官方文档手动安装 Docker。"
+      # 不再吞掉关键错误：否则你永远不知道失败原因
+      if ! apt_install docker.io; then
+        warn "通过 apt 安装 docker.io 失败（上方应有失败原因）。"
+      fi
       start_docker_daemon_soft
     else
       warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
@@ -141,13 +201,11 @@ ensure_docker_stack() {
   fi
 
   if ! docker_daemon_ok; then
+    print_docker_diag
     die "Docker daemon 不可用。请先确保 docker info 正常后再运行脚本。"
   fi
 
-  if ! detect_compose; then
-    die "未检测到 docker compose 或 docker-compose。请先安装 compose 后再运行脚本。"
-  fi
-
+  ensure_compose_stack
   info "已选择使用 compose：${COMPOSE_KIND}"
 }
 
