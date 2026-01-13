@@ -9,7 +9,6 @@ DEFAULT_BASE_CFG_URL="https://raw.githubusercontent.com/lucifer988/openppp2-dock
 DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
 # 关键修复：为 io_uring 放开容器 seccomp/apparmor 限制
-# （避免：io_uring_queue_init: Operation not permitted）
 DEFAULT_SECURITY_OPT_SECCOMP="seccomp=unconfined"
 DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
@@ -153,13 +152,11 @@ install_docker_from_debian() {
 }
 
 install_docker_compose_plugin_if_missing() {
-  # 目标：确保 "docker compose" 可用（推荐），否则提供 docker-compose（兼容）
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
     return 0
   fi
 
   if need_cmd apt-get; then
-    # 优先安装 compose 插件（Debian/Ubuntu 常见包名）
     apt_install docker-compose-plugin >/dev/null 2>&1 || true
   fi
 
@@ -167,7 +164,6 @@ install_docker_compose_plugin_if_missing() {
     return 0
   fi
 
-  # 兜底：安装老版 docker-compose
   if ! need_cmd docker-compose && need_cmd apt-get; then
     apt_install docker-compose >/dev/null 2>&1 || true
   fi
@@ -183,7 +179,6 @@ ensure_docker_stack() {
   else
     if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
       warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
-      # 直接用 docker.io（你实际环境验证过可用）
       install_docker_from_debian || warn "通过 apt 安装 docker.io 失败，请手动安装 Docker。"
     else
       warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
@@ -289,7 +284,6 @@ compose_header() {
   fi
 }
 
-# --- 核心修复：给 openppp2 容器加 unconfined，避免 io_uring EPERM 崩溃 ---
 compose_security_opt_block() {
   cat <<EOF
     security_opt:
@@ -318,6 +312,7 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
+# 客户端：已移除 --tun-mux / --tun-mux-acceleration / --tun-ssmt
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
@@ -352,7 +347,6 @@ $(compose_security_opt_block)
       - "--block-quic=yes"
       - "--bypass-iplist=ip.txt"
       - "--dns-rules=dns-rules.txt"
-      - "--tun-ssmt=4/st"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
@@ -361,6 +355,7 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
+# 新增客户端实例：同样移除三项参数
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
@@ -394,7 +389,6 @@ $(compose_security_opt_block)
       - "--block-quic=yes"
       - "--bypass-iplist=ip.txt"
       - "--dns-rules=dns-rules.txt"
-      - "--tun-ssmt=4/st"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
@@ -467,7 +461,6 @@ health_check_one() {
     exit 1
   fi
 
-  # 额外检查：如果有 io_uring EPERM，给出明确诊断
   if docker logs "$svc" 2>/dev/null | tail -n 200 | grep -q 'io_uring_queue_init: Operation not permitted'; then
     warn "检测到 io_uring 被拒绝（Operation not permitted）。"
     warn "已默认写入 security_opt: seccomp=unconfined + apparmor=unconfined。"
@@ -480,11 +473,11 @@ health_check_one() {
 do_install() {
   ensure_docker_stack
 
-  echo "==============================" >&2
-  echo "  请选择安装/部署角色：" >&2
-  echo "    1) 服务端（Server）" >&2
-  echo "    2) 客户端（Client）" >&2
-  echo "==============================" >&2
+  echo "=============================="
+  echo "  请选择安装/部署角色："
+  echo "    1) 服务端（Server）"
+  echo "    2) 客户端（Client）"
+  echo "=============================="
   local ROLE
   prompt ROLE "请输入数字选择（1 或 2）" "1"
 
@@ -591,18 +584,18 @@ do_install() {
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
 
-    echo >&2
-    echo "当前客户端配置信息：" >&2
-    echo "  配置文件：${APP_CFG_NAME}" >&2
-    echo "  server   ：${SERVER_URI}" >&2
-    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
-    echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
-    echo "  tun-host ：no（已强制写入命令行参数）" >&2
+    echo
+    echo "当前客户端配置信息："
+    echo "  配置文件：${APP_CFG_NAME}"
+    echo "  server   ：${SERVER_URI}"
+    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
+    echo "  HTTP     ：${lan}:${HTTP_PORT}"
+    echo "  tun-host ：no（已强制写入命令行参数）"
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
 
-  echo >&2
+  echo
   info "启动 openppp2..."
   cd "$APP_DIR"
   compose up -d --remove-orphans
@@ -615,10 +608,10 @@ do_install() {
 
   setup_systemd_weekly_update
 
-  echo >&2
-  echo "===== 完成 =====" >&2
-  echo "配置目录：${APP_DIR}" >&2
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>" >&2
+  echo
+  echo "===== 完成 ====="
+  echo "配置目录：${APP_DIR}"
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
 }
 
 do_uninstall() {
@@ -772,15 +765,15 @@ do_add_client() {
   compose up -d --remove-orphans "${SVC_NAME}"
   health_check_one "${SVC_NAME}"
 
-  echo >&2
-  echo "当前新增客户端配置信息：" >&2
-  echo "  配置文件：${CFG_NAME}" >&2
-  echo "  server   ：${SERVER_URI}" >&2
-  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
-  echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
-  echo "  tun-host ：no（已强制写入命令行参数）" >&2
-  echo >&2
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}" >&2
+  echo
+  echo "当前新增客户端配置信息："
+  echo "  配置文件：${CFG_NAME}"
+  echo "  server   ：${SERVER_URI}"
+  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
+  echo "  HTTP     ：${lan}:${HTTP_PORT}"
+  echo "  tun-host ：no（已强制写入命令行参数）"
+  echo
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
 }
 
 do_show_info() {
@@ -817,7 +810,6 @@ do_show_info() {
   fi
 }
 
-# ====== 选项 5：删除实例/配置（修复版）======
 CLIENT_CFG_LIST=()
 
 list_client_cfgs() {
@@ -869,14 +861,14 @@ remove_service_block() {
 }
 
 select_cfg_interactive() {
-  echo >&2
-  echo "可删除的客户端配置文件列表：" >&2
+  echo
+  echo "可删除的客户端配置文件列表："
   print_client_cfgs
-  echo >&2
-  echo "你可以：" >&2
-  echo "  - 输入编号（例如 2）" >&2
-  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）" >&2
-  echo >&2
+  echo
+  echo "你可以："
+  echo "  - 输入编号（例如 2）"
+  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）"
+  echo
 
   local sel=""
   prompt sel "请输入要删除的配置（编号/名称/关键词）" ""
@@ -909,7 +901,7 @@ select_cfg_interactive() {
   fi
 
   if [[ "${#matches[@]}" -gt 1 ]]; then
-    echo >&2
+    echo
     warn "匹配到多个配置，请输入更精确的名称："
     local i=1
     for f in "${matches[@]}"; do
@@ -949,11 +941,11 @@ do_delete_client() {
   local svc=""
   svc="$(find_service_by_cfg "$cfg" || true)"
 
-  echo >&2
-  echo "即将删除：" >&2
-  echo "  配置文件：$cfg" >&2
-  echo "  对应服务：${svc:-（未能自动定位）}" >&2
-  echo >&2
+  echo
+  echo "即将删除："
+  echo "  配置文件：$cfg"
+  echo "  对应服务：${svc:-（未能自动定位）}"
+  echo
 
   local yesno
   prompt yesno "确认删除？输入 yes 继续" "no"
