@@ -255,6 +255,7 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
+# ✅ 已移除：--tun-mux=4 与 --tun-mux-acceleration=3
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
@@ -288,8 +289,6 @@ services:
       - "--block-quic=yes"
       - "--bypass-iplist=ip.txt"
       - "--dns-rules=dns-rules.txt"
-      - "--tun-mux=4"
-      - "--tun-mux-acceleration=3"
       - "--tun-ssmt=4/st"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
@@ -299,6 +298,7 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
+# ✅ 已移除：--tun-mux=4 与 --tun-mux-acceleration=3
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
@@ -331,8 +331,6 @@ append_compose_client() {
       - "--block-quic=yes"
       - "--bypass-iplist=ip.txt"
       - "--dns-rules=dns-rules.txt"
-      - "--tun-mux=4"
-      - "--tun-mux-acceleration=3"
       - "--tun-ssmt=4/st"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
@@ -767,13 +765,13 @@ list_client_cfgs() {
 
 print_client_cfgs() {
   local i=1
+  local f
   for f in "${CLIENT_CFG_LIST[@]}"; do
     echo "  $i) $f" >&2
     i=$((i+1))
   done
 }
 
-# 更强的 service 定位：匹配 volume 行中出现 "./cfg"
 find_service_by_cfg() {
   local cfg="$1"
   awk -v cfg="$cfg" '
@@ -799,7 +797,6 @@ remove_service_block() {
   mv "$tmp" "$COMPOSE_FILE"
 }
 
-# ✅ 修复：所有交互输出都去 stderr；stdout 只 echo 最终文件名
 select_cfg_interactive() {
   echo >&2
   echo "可删除的客户端配置文件列表：" >&2
@@ -876,7 +873,7 @@ do_delete_client() {
   fi
 
   local cfg
-  cfg="$(select_cfg_interactive)"   # ✅ 现在 cfg 是干净的（只会是一行文件名）
+  cfg="$(select_cfg_interactive)"
 
   local svc=""
   svc="$(find_service_by_cfg "$cfg" || true)"
