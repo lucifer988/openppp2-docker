@@ -13,13 +13,30 @@ DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
 COMPOSE_KIND=""
 
-need_cmd() { command -v "$1" >/dev/null 2>&1; }
-is_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]]; }
-has_systemd() { [[ -d /run/systemd/system ]] && need_cmd systemctl; }
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
 
-die() { echo -e "[!]\t$*" >&2; exit 1; }
-info() { echo -e "[*]\t$*"; }
-warn() { echo -e "[!]\t$*" >&2; }
+is_root() {
+  [[ "${EUID:-$(id -u)}" -eq 0 ]]
+}
+
+has_systemd() {
+  [[ -d /run/systemd/system ]] && need_cmd systemctl
+}
+
+die() {
+  echo -e "[!]\t$*" >&2
+  exit 1
+}
+
+info() {
+  echo -e "[*]\t$*"
+}
+
+warn() {
+  echo -e "[!]\t$*" >&2
+}
 
 prompt() {
   local __var="$1" __msg="$2" __def="${3:-}"
@@ -96,9 +113,9 @@ force_apt_ipv4() {
     return 0
   fi
   info "正在为 APT 启用 IPv4 优先策略（避免 IPv6 卡住）..."
-  cat > "$cfg" <<EOF
+  cat > "$cfg" <<'APTEOF'
 Acquire::ForceIPv4 "true";
-EOF
+APTEOF
   info "APT 已强制使用 IPv4：$cfg"
 }
 
@@ -151,7 +168,9 @@ install_docker_from_debian() {
 }
 
 install_docker_compose_plugin_if_missing() {
-  if need_cmd docker &&
+  if need_cmd docker && docker compose version >/dev/null 2>&1; then
+    return 0
+  fi
 
   if need_cmd apt-get; then
     apt_install docker-compose-plugin >/dev/null 2>&1 || true
@@ -241,8 +260,7 @@ detect_net() {
 
   if [[ "${dev:-}" =~ ^(ppp|tun|wg|tailscale|docker|br-|virbr|lo) ]] || [[ "${lan:-}" =~ ^10\. ]]; then
     local cand cand_ip
-    cand="$(ip -o link show up | awk -F': ' '{print $2}' | \
-      grep -Ev '^(lo|ppp|tun|wg|tailscale|docker|br-|virbr)' | head -n1 || true)"
+    cand="$(ip -o link show up | awk -F': ' '{print $2}' | grep -Ev '^(lo|ppp|tun|wg|tailscale|docker|br-|virbr)' | head -n1 || true)"
     if [[ -n "$cand" ]]; then
       cand_ip="$(ip -4 addr show "$cand" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
       if [[ -n "$cand_ip" ]]; then
@@ -266,9 +284,9 @@ download_base_cfg() {
 enable_ip_forward_host() {
   info "尝试开启宿主机 IPv4 转发（client 需要）..."
   if sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1; then
-    cat >/etc/sysctl.d/99-openppp2.conf <<'EOF'
+    cat >/etc/sysctl.d/99-openppp2.conf <<'SYSCTLEOF'
 net.ipv4.ip_forward=1
-EOF
+SYSCTLEOF
     sysctl --system >/dev/null 2>&1 || true
   else
     warn "sysctl 写入失败（可能权限受限）。你可手动执行：sysctl -w net.ipv4.ip_forward=1"
@@ -279,7 +297,7 @@ generate_seccomp_profile() {
   local seccomp_file="$1"
   info "生成自定义 seccomp 配置文件：${seccomp_file}"
   
-  cat > "$seccomp_file" <<'EOF'
+  cat > "$seccomp_file" <<'SECCOMPEOF'
 {
   "defaultAction": "SCMP_ACT_ERRNO",
   "defaultErrnoRet": 1,
@@ -738,7 +756,7 @@ generate_seccomp_profile() {
     }
   ]
 }
-EOF
+SECCOMPEOF
   
   info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
 }
@@ -750,18 +768,17 @@ compose_header() {
 }
 
 compose_security_opt_block() {
-  cat <<EOF
+  cat <<'SECOPTEOF'
     security_opt:
       - seccomp=./seccomp-openppp2.json
-      - ${DEFAULT_SECURITY_OPT_APPARMOR}
-EOF
+      - apparmor=unconfined
+SECOPTEOF
 }
 
 write_compose_server() {
   local image="$1" cfg="$2"
-  {
-    compose_header
-    cat <<EOF
+  compose_header > "$COMPOSE_FILE"
+  cat >> "$COMPOSE_FILE" <<SERVEREOF
 services:
   openppp2:
     image: ${image}
@@ -773,15 +790,13 @@ $(compose_security_opt_block)
     ports:
       - "20000:20000/tcp"
       - "20000:20000/udp"
-EOF
-  } >"$COMPOSE_FILE"
+SERVEREOF
 }
 
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
-  {
-    compose_header
-    cat <<EOF
+  compose_header > "$COMPOSE_FILE"
+  cat >> "$COMPOSE_FILE" <<CLIENTEOF
 services:
   ${svc}:
     image: ${image}
@@ -815,14 +830,12 @@ $(compose_security_opt_block)
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
       - "${gw}"
-EOF
-  } >"$COMPOSE_FILE"
+CLIENTEOF
 }
 
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
-  {
-    cat <<EOF
+  cat >> "$COMPOSE_FILE" <<APPENDEOF
 
   ${svc}:
     image: ${image}
@@ -856,8 +869,7 @@ $(compose_security_opt_block)
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
       - "${gw}"
-EOF
-  } >>"$COMPOSE_FILE"
+APPENDEOF
 }
 
 setup_systemd_weekly_update() {
@@ -871,7 +883,7 @@ setup_systemd_weekly_update() {
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
 
-  cat >/usr/local/bin/openppp2-update.sh <<'EOF'
+  cat >/usr/local/bin/openppp2-update.sh <<'UPDATEEOF'
 #!/usr/bin/env bash
 set -euo pipefail
 cd /opt/openppp2
@@ -884,10 +896,10 @@ fi
 
 "${dc[@]}" pull
 "${dc[@]}" up -d --remove-orphans
-EOF
+UPDATEEOF
   chmod +x /usr/local/bin/openppp2-update.sh
 
-  cat >/etc/systemd/system/openppp2-update.service <<'EOF'
+  cat >/etc/systemd/system/openppp2-update.service <<'SERVICEEOF'
 [Unit]
 Description=Update openppp2 container images
 After=docker.service
@@ -896,9 +908,9 @@ Requires=docker.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/openppp2-update.sh
-EOF
+SERVICEEOF
 
-  cat >/etc/systemd/system/openppp2-update.timer <<EOF
+  cat >/etc/systemd/system/openppp2-update.timer <<TIMEREOF
 [Unit]
 Description=Run openppp2 update weekly
 
@@ -909,7 +921,7 @@ Unit=openppp2-update.service
 
 [Install]
 WantedBy=timers.target
-EOF
+TIMEREOF
 
   systemctl daemon-reload
   systemctl enable --now openppp2-update.timer
@@ -935,11 +947,11 @@ health_check_one() {
 do_install() {
   ensure_docker_stack
 
-  echo "==============================" >&2
-  echo "  请选择安装/部署角色：" >&2
-  echo "    1) 服务端（Server）" >&2
-  echo "    2) 客户端（Client）" >&2
-  echo "==============================" >&2
+  echo "=============================="
+  echo "  请选择安装/部署角色："
+  echo "    1) 服务端（Server）"
+  echo "    2) 客户端（Client）"
+  echo "=============================="
   local ROLE
   prompt ROLE "请输入数字选择（1 或 2）" "1"
 
@@ -966,14 +978,13 @@ do_install() {
       prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" ""
     fi
 
-    jq --arg ip "$SERVER_PUBLIC_IP" \
-      '.ip.public=$ip | .ip.interface=$ip' \
-      appsettings.base.json > "$APP_CFG_NAME"
+    jq --arg ip "$SERVER_PUBLIC_IP" '.ip.public=$ip | .ip.interface=$ip' appsettings.base.json > "$APP_CFG_NAME"
 
     write_compose_server "$IMAGE" "$APP_CFG_NAME"
     echo "server" > "${APP_DIR}/.role"
 
-  elif [[ "$ROLE" ==dev/net/tun ]] || die "/dev/net/tun 不存在：宿主机不支持 TUN，client 无法运行。"
+  elif [[ "$ROLE" == "2" ]]; then
+    [[ -c /dev/net/tun ]] || die "/dev/net/tun 不存在：宿主机不支持 TUN，client 无法运行。"
 
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings-RFCHK.json）" "appsettings.json"
@@ -987,8 +998,12 @@ do_install() {
 
     guid="$(gen_guid)"
     netinfo="$(detect_net)"
-    lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
-    nic="${netinfo%%|*}"; gw="${netinfo#*|}" [[ -z "${lan:-}" || "${ [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
+    lan="${netinfo%%|*}"
+    netinfo="${netinfo#*|}"
+    nic="${netinfo%%|*}"
+    gw="${netinfo#*|}"
+
+    if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
       warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
       prompt lan "请输入客户端内网 IP（用于 http/socks bind，例如 192.168.1.100）" ""
     else
@@ -1014,7 +1029,7 @@ do_install() {
     local HTTP_PORT SOCKS_PORT
     HTTP_PORT="$(random_free_port)"
     SOCKS_PORT="$(random_free_port)"
-    while [[ "$SOCKS_PORT" == "$HTTP_PORT" ]]; do
+    while [[ "$HTTP_PORT" ]]; do
       SOCKS_PORT="$(random_free_port)"
     done
 
@@ -1023,12 +1038,7 @@ do_install() {
       --arg lan "$lan" \
       --argjson hport "$HTTP_PORT" \
       --argjson sport "$SOCKS_PORT" \
-      ' .client.server=$srv
-        | .client.guid=$guid
-        | .client["http-proxy"].bind=$lan
-        | .client["socks-proxy"].bind=$lan
-        | .client["http-proxy"].port=$hport
-        | .client["socks-proxy"].port=$sport ' \
+      '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
       appsettings.base.json > "$APP_CFG_NAME"
 
     [[ -f ip.txt ]] || : > ip.txt
@@ -1045,18 +1055,18 @@ do_install() {
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
 
-    echo >&2
-    echo "当前客户端配置信息：" >&2
-    echo "  配置文件：${APP_CFG_NAME}" >&2
-    echo "  server   ：${SERVER_URI}" >&2
-    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
-    echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
-    echo "  tun-host ：no（已强制写入命令行参数）" >&2
+    echo
+    echo "当前客户端配置信息："
+    echo "  配置文件：${APP_CFG_NAME}"
+    echo "  server   ：${SERVER_URI}"
+    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
+    echo "  HTTP     ：${lan}:${HTTP_PORT}"
+    echo "  tun-host ：no（已强制写入命令行参数）"
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
 
-  echo >&2
+  echo
   info "启动 openppp2..."
   cd "$APP_DIR"
   compose up -d --remove-orphans
@@ -1069,11 +1079,11 @@ do_install() {
 
   setup_systemd_weekly_update
 
-  echo >&2
-  echo "===== 完成 =====" >&2
-  echo "配置目录：${APP_DIR}" >&2
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>" >&2
-  echo >&2
+  echo
+  echo "===== 完成 ====="
+  echo "配置目录：${APP_DIR}"
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
+  echo
   info "安全配置：使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
 }
 
@@ -1086,7 +1096,9 @@ do_uninstall() {
   rm -f /etc/systemd/system/openppp2-update.timer \
         /etc/systemd/system/openppp2-update.service \
         /usr/local/bin/openppp2-update.sh >/dev/null 2>&1 || true
-  if has_systemd; then systemctl daemon-reload >/dev/null 2>&1 || true; fi
+  if has_systemd; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
 
   if need_cmd docker; then
     docker rm -f watchtower >/dev/null 2>&1 || true
@@ -1152,8 +1164,10 @@ do_add_client() {
 
   guid="$(gen_guid)"
   netinfo="$(detect_net)"
-  lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
-  nic="${netinfo%%|*}"; gw="${netinfo#*|}"
+  lan="${netinfo%%|*}"
+  netinfo="${netinfo#*|}"
+  nic="${netinfo%%|*}"
+  gw="${netinfo#*|}"
 
   if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
     warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
@@ -1214,12 +1228,7 @@ do_add_client() {
     --arg lan "$lan" \
     --argjson hport "$HTTP_PORT" \
     --argjson sport "$SOCKS_PORT" \
-    ' .client.server=$srv
-      | .client.guid=$guid
-      | .client["http-proxy"].bind=$lan
-      | .client["socks-proxy"].bind=$lan
-      | .client["http-proxy"].port=$hport
-      | .client["socks-proxy"].port=$sport ' \
+    '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
     appsettings.base.json > "${CFG_NAME}"
 
   [[ -f "$ipfile" ]] || : > "$ipfile"
@@ -1227,21 +1236,21 @@ do_add_client() {
 
   enable_ip_forward_host
 
-  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}"
+  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tgw}"
 
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
   health_check_one "${SVC_NAME}"
 
-  echo >&2
-  echo "当前新增客户端配置信息：" >&2
-  echo "  配置文件：${CFG_NAME}" >&2
-  echo "  server   ：${SERVER_URI}" >&2
-  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
-  echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
-  echo "  tun-host ：no（已强制写入命令行参数）" >&2
-  echo >&2
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}" >&2
+  echo
+  echo "当前新增客户端配置信息："
+  echo "  配置文件：${CFG_NAME}"
+  echo "  server   ：${SERVER_URI}"
+  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
+  echo "  HTTP     ：${lan}:${HTTP_PORT}"
+  echo "  tun-host ：no（已强制写入命令行参数）"
+  echo
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
 }
 
 do_show_info() {
@@ -1298,7 +1307,7 @@ print_client_cfgs() {
   local i=1
   local f
   for f in "${CLIENT_CFG_LIST[@]}"; do
-    echo "  $i) $f" >&2
+    echo "  $i) $f"
     i=$(( i + 1 ))
   done
 }
@@ -1329,14 +1338,14 @@ remove_service_block() {
 }
 
 select_cfg_interactive() {
-  echo >&2
-  echo "可删除的客户端配置文件列表：" >&2
+  echo
+  echo "可删除的客户端配置文件列表："
   print_client_cfgs
-  echo >&2
-  echo "你可以：" >&2
-  echo "  - 输入编号（例如 2）" >&2
-  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）" >&2
-  echo >&2
+  echo
+  echo "你可以："
+  echo "  - 输入编号（例如 2）"
+  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）"
+  echo
 
   local sel=""
   prompt sel "请输入要删除的配置（编号/名称/关键词）" ""
@@ -1371,11 +1380,11 @@ select_cfg_interactive() {
   fi
 
   if [[ "${#matches[@]}" -gt 1 ]]; then
-    echo >&2
+    echo
     warn "匹配到多个配置，请输入更精确的名称："
     local i=1
     for f in "${matches[@]}"; do
-      echo "  $i) $f" >&2
+      echo "  $i) $f"
       i=$(( i + 1 ))
     done
     die "请重新运行选项 5 并输入更精确的关键词/文件名。"
@@ -1411,11 +1420,11 @@ do_delete_client() {
   local svc=""
   svc="$(find_service_by_cfg "$cfg" || true)"
 
-  echo >&2
-  echo "即将删除：" >&2
-  echo "  配置文件：$cfg" >&2
-  echo "  对应服务：${svc:-（未能自动定位）}" >&2
-  echo >&2
+  echo
+  echo "即将删除："
+  echo "  配置文件：$cfg"
+  echo "  对应服务：${svc:-（未能自动定位）}"
+  echo
 
   local yesno
   prompt yesno "确认删除？输入 yes 继续" "no"
@@ -1471,11 +1480,7 @@ main() {
 
   case "$ACTION" in
     1) do_install ;;
-    2) do_uninstall ;;
-    3) do_add_client ;;
-    4) do_show_info ;;
-    5) do_delete_client ;;
-    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
+    2) do_uninstall ;; "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
   esac
 }
 
