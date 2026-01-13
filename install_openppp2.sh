@@ -9,10 +9,9 @@ DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
 DEFAULT_BASE_CFG_URL="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
 DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
-# 使用自定义 seccomp 配置（方案一：仅放开必要的 io_uring 系统调用）
 DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
-COMPOSE_KIND="" # "docker compose" or "docker-compose"
+COMPOSE_KIND=""
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 is_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]]; }
@@ -48,7 +47,7 @@ prompt_port() {
   local p=""
   while :; do
     prompt p "$__msg" "$__def"
-    if [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )); then
+    if [[ "$p" =~ ^[0-9]+$ ]] && [[ "$p" -ge 1 ]] && [[ "$p" -le 65535 ]]; then
       printf -v "$__var" "%s" "$p"
       return 0
     fi
@@ -152,9 +151,7 @@ install_docker_from_debian() {
 }
 
 install_docker_compose_plugin_if_missing() {
-  if need_cmd docker && docker compose version >/dev/null 2>&1; then
-    return 0
-  fi
+  if need_cmd docker &&
 
   if need_cmd apt-get; then
     apt_install docker-compose-plugin >/dev/null 2>&1 || true
@@ -218,7 +215,7 @@ random_free_port() {
       echo "$p"
       return 0
     fi
-    tries=$((tries+1))
+    tries=$(( tries + 1 ))
     if [[ "$tries" -gt 200 ]]; then
       die "10000-60000 区间内未找到空闲端口，请检查端口占用情况。"
     fi
@@ -278,7 +275,6 @@ EOF
   fi
 }
 
-# 生成自定义 seccomp 配置文件（方案一：仅放开必要的 io_uring 系统调用）
 generate_seccomp_profile() {
   local seccomp_file="$1"
   info "生成自定义 seccomp 配置文件：${seccomp_file}"
@@ -753,7 +749,6 @@ compose_header() {
   fi
 }
 
-# 使用自定义 seccomp 配置（相对路径）
 compose_security_opt_block() {
   cat <<EOF
     security_opt:
@@ -872,7 +867,7 @@ setup_systemd_weekly_update() {
   fi
 
   echo >&2
-  info "设置 systemd 每周自动更新（pull +d）"
+  info "设置 systemd 每周自动更新（pull + up -d）"
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
 
@@ -955,7 +950,6 @@ do_install() {
   download_base_cfg "$BASE_URL"
   cd "$APP_DIR"
 
-  # 生成自定义 seccomp 配置文件
   generate_seccomp_profile "$SECCOMP_FILE"
 
   docker rm -f watchtower >/dev/null 2>&1 || true
@@ -979,8 +973,7 @@ do_install() {
     write_compose_server "$IMAGE" "$APP_CFG_NAME"
     echo "server" > "${APP_DIR}/.role"
 
-  elif [[ "$ROLE" == "2" ]]; then
-    [[ -c /dev/net/tun ]] || die "/dev/net/tun 不存在：宿主机不支持 TUN，client 无法运行。"
+  elif [[ "$ROLE" ==dev/net/tun ]] || die "/dev/net/tun 不存在：宿主机不支持 TUN，client 无法运行。"
 
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings-RFCHK.json）" "appsettings.json"
@@ -995,9 +988,7 @@ do_install() {
     guid="$(gen_guid)"
     netinfo="$(detect_net)"
     lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
-    nic="${netinfo%%|*}"; gw="${netinfo#*|}"
-
-    if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
+    nic="${netinfo%%|*}"; gw="${netinfo#*|}" [[ -z "${lan:-}" || "${ [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
       warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
       prompt lan "请输入客户端内网 IP（用于 http/socks bind，例如 192.168.1.100）" ""
     else
@@ -1104,7 +1095,7 @@ do_uninstall() {
   if [[ -d "$APP_DIR" ]] && need_cmd docker; then
     cd "$APP_DIR"
     detect_compose >/dev/null 2>&1 || true
-    if [[ -n "$COMPOSE "$COMPOSE_KIND" ]]; then
+    if [[ -n "$COMPOSE_KIND" ]]; then
       info "停止并删除容器..."
       compose down --remove-orphans >/dev/null 2>&1 || true
     else
@@ -1138,7 +1129,6 @@ do_add_client() {
 
   cd "$APP_DIR"
 
-  # 确保 seccomp 配置文件存在
   if [[ ! -f "$SECCOMP_FILE" ]]; then
     info "未找到 seccomp 配置文件，正在生成..."
     generate_seccomp_profile "$SECCOMP_FILE"
@@ -1190,7 +1180,7 @@ do_add_client() {
 
   local idx=2
   while grep -q "openppp2-${idx}:" "$COMPOSE_FILE" 2>/dev/null; do
-    idx=$((idx+1))
+    idx=$(( idx + 1 ))
   done
   local default_svc="openppp2-${idx}"
 
@@ -1309,7 +1299,7 @@ print_client_cfgs() {
   local f
   for f in "${CLIENT_CFG_LIST[@]}"; do
     echo "  $i) $f" >&2
-    i=$((i+1))
+    i=$(( i + 1 ))
   done
 }
 
@@ -1353,8 +1343,10 @@ select_cfg_interactive() {
 
   if [[ "$sel" =~ ^[0-9]+$ ]]; then
     local idx="$sel"
-    if (( idx >= 1 && idx <= ${#CLIENT_CFG_LIST[@]} )); then
-      echo "${CLIENT_CFG_LIST[$((idx-1))]}"
+    local max_idx="${#CLIENT_CFG_LIST[@]}"
+    if [[ "$idx" -ge 1 ]] && [[ "$idx" -le "$max_idx" ]]; then
+      local arr_idx=$(( idx - 1 ))
+      echo "${CLIENT_CFG_LIST[$arr_idx]}"
       return 0
     fi
     die "编号无效。"
@@ -1365,7 +1357,7 @@ select_cfg_interactive() {
     return 0
   fi
 
-  local -a matches=()
+  local matches=()
   local f
   for f in "${CLIENT_CFG_LIST[@]}"; do
     if [[ "$f" == *"$sel"* ]]; then
@@ -1384,7 +1376,7 @@ select_cfg_interactive() {
     local i=1
     for f in "${matches[@]}"; do
       echo "  $i) $f" >&2
-      i=$((i+1))
+      i=$(( i + 1 ))
     done
     die "请重新运行选项 5 并输入更精确的关键词/文件名。"
   fi
@@ -1442,7 +1434,7 @@ do_delete_client() {
 
     rm -f "ip-${svc}.txt" "dns-rules-${svc}.txt" >/dev/null 2>&1 || true
   else
-    warn "未能定位 service：身（若实例仍会被拉起，请手动从 docker-compose.yml 移除对应 service）。"
+    warn "未能定位 service：将仅删除配置文件本身（若实例仍会被拉起，请手动从 docker-compose.yml 移除对应 service）。"
   fi
 
   info "删除配置文件：$cfg"
