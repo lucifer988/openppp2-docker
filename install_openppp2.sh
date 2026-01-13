@@ -8,10 +8,6 @@ DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
 DEFAULT_BASE_CFG_URL="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
 DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
-# 关键修复：为 io_uring 放开容器 seccomp/apparmor 限制
-DEFAULT_SECURITY_OPT_SECCOMP="seccomp=unconfined"
-DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
-
 COMPOSE_KIND="" # "docker compose" or "docker-compose"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -27,7 +23,7 @@ prompt() {
   local __val=""
 
   local __env_val="${!__var-}"
-  if [[ -n "$__env_val" ]]; then
+  if [[ -n "${__env_val}" ]]; then
     __val="$__env_val"
     printf -v "$__var" "%s" "$__val"
     info "使用环境变量 ${__var}=${__val}"
@@ -106,7 +102,7 @@ EOF
 ensure_basic_tools() {
   force_apt_ipv4
   if need_cmd apt-get; then
-    apt_install ca-certificates curl jq iproute2 gnupg >/dev/null 2>&1 || true
+    apt_install ca-certificates curl jq iproute2 gnupg lsb-release >/dev/null 2>&1 || true
   fi
   need_cmd curl || die "curl 未安装成功，请手动安装 curl 后重试。"
   need_cmd jq   || die "jq 未安装成功，请手动安装 jq 后重试。"
@@ -124,73 +120,139 @@ start_docker_daemon_soft() {
   fi
 }
 
-docker_daemon_ok() {
-  need_cmd docker || return 1
+docker_info_ok_once() {
+  # 有些环境刚装完 docker，dockerd 已 active 但 API 还没 ready
   docker info >/dev/null 2>&1
 }
 
-print_docker_diagnose() {
+docker_daemon_ok_retry() {
+  need_cmd docker || return 1
+  local i
+  for i in {1..30}; do
+    if docker_info_ok_once; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+print_docker_diag() {
   warn "Docker 诊断信息（用于排查 docker info 失败的真实原因）："
   warn "环境变量（可能污染 docker 连接目标）："
-  echo "  DOCKER_HOST=${DOCKER_HOST-}" >&2
-  echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT-}" >&2
+  echo "  DOCKER_HOST=${DOCKER_HOST-}"
+  echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT-}"
   if has_systemd; then
     warn "systemctl status docker："
     systemctl status docker --no-pager -l || true
     warn "journalctl -u docker（最近 120 行）："
     journalctl -u docker -n 120 --no-pager || true
   else
-    warn "非 systemd 环境：请自行查看 docker daemon 日志。"
+    warn "非 systemd 环境：请手动查看 dockerd 日志。"
   fi
 }
 
-install_docker_from_debian() {
+detect_os() {
+  # 输出: ID|VERSION_CODENAME
+  local id="" codename=""
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    id="${ID:-}"
+    codename="${VERSION_CODENAME:-}"
+  fi
+  echo "${id}|${codename}"
+}
+
+install_docker_official_repo() {
+  # Debian/Ubuntu：用官方 docker apt 仓库安装 docker-ce + compose plugin（最稳定）
+  ensure_basic_tools
+  need_cmd apt-get || return 1
+
+  local os id codename
+  os="$(detect_os)"
+  id="${os%%|*}"
+  codename="${os#*|}"
+
+  if [[ "$id" != "debian" && "$id" != "ubuntu" ]]; then
+    return 1
+  fi
+  [[ -n "${codename}" ]] || codename="$(lsb_release -cs 2>/dev/null || true)"
+  [[ -n "${codename}" ]] || return 1
+
+  info "检测到系统：${id} ${codename}，尝试使用 Docker 官方仓库安装 docker-ce..."
+
+  install -m 0755 -d /etc/apt/keyrings
+  if [[ "$id" == "debian" ]]; then
+    curl_retry -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+    cat >/etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${codename} stable
+EOF
+  else
+    curl_retry -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+    cat >/etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${codename} stable
+EOF
+  fi
+
+  apt-get update -y
+
+  # docker-ce + compose plugin
+  # 注意：有些系统有旧 docker.io / podman 冲突，这里让 apt 自己处理依赖即可
+  apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null 2>&1
+
+  start_docker_daemon_soft
+  docker_daemon_ok_retry
+}
+
+install_docker_from_distro_repo() {
+  ensure_basic_tools
+  need_cmd apt-get || return 1
+
   info "尝试通过 Debian/Ubuntu 仓库安装 docker.io ..."
   apt_install docker.io >/dev/null 2>&1 || return 1
   start_docker_daemon_soft
-  return 0
-}
 
-install_docker_compose_plugin_if_missing() {
-  if need_cmd docker && docker compose version >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if need_cmd apt-get; then
-    apt_install docker-compose-plugin >/dev/null 2>&1 || true
-  fi
-
-  if need_cmd docker && docker compose version >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if ! need_cmd docker-compose && need_cmd apt-get; then
+  # docker.io 通常不自带 compose plugin，补装一个（优先 plugin，其次 standalone）
+  apt_install docker-compose-plugin >/dev/null 2>&1 || true
+  if ! docker compose version >/dev/null 2>&1; then
     apt_install docker-compose >/dev/null 2>&1 || true
   fi
 
-  return 0
+  docker_daemon_ok_retry
 }
 
 ensure_docker_stack() {
   ensure_basic_tools
 
-  if docker_daemon_ok; then
+  if need_cmd docker && docker_daemon_ok_retry; then
     info "已检测到可用的 Docker 环境。"
   else
-    if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
-      warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
-      install_docker_from_debian || warn "通过 apt 安装 docker.io 失败，请手动安装 Docker。"
+    warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
+
+    # 先走官方 repo（一般成功率最高）
+    if install_docker_official_repo; then
+      info "Docker（官方仓库）安装完成。"
     else
-      warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
+      info "官方仓库安装失败或系统不匹配，改用系统仓库 docker.io ..."
+      if install_docker_from_distro_repo; then
+        info "Docker（系统仓库 docker.io）安装完成。"
+      else
+        print_docker_diag
+        die "Docker 安装/启动失败。请先确保 docker info 正常后再运行脚本。"
+      fi
     fi
   fi
 
-  if ! docker_daemon_ok; then
-    print_docker_diagnose
-    die "Docker daemon 不可用（或 docker CLI 无法连接）。请先确保 docker info 正常后再运行脚本。"
+  if ! detect_compose; then
+    # 兜底：再补装一次 compose
+    if need_cmd apt-get; then
+      apt_install docker-compose-plugin >/dev/null 2>&1 || true
+      apt_install docker-compose >/dev/null 2>&1 || true
+    fi
   fi
-
-  install_docker_compose_plugin_if_missing
 
   if ! detect_compose; then
     die "未检测到 docker compose 或 docker-compose。请先安装 compose 后再运行脚本。"
@@ -284,14 +346,6 @@ compose_header() {
   fi
 }
 
-compose_security_opt_block() {
-  cat <<EOF
-    security_opt:
-      - ${DEFAULT_SECURITY_OPT_SECCOMP}
-      - ${DEFAULT_SECURITY_OPT_APPARMOR}
-EOF
-}
-
 write_compose_server() {
   local image="$1" cfg="$2"
   {
@@ -302,7 +356,6 @@ services:
     image: ${image}
     container_name: openppp2
     restart: unless-stopped
-$(compose_security_opt_block)
     volumes:
       - ./${cfg}:/opt/openppp2/appsettings.json:ro
     ports:
@@ -312,7 +365,8 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# 客户端：已移除 --tun-mux / --tun-mux-acceleration / --tun-ssmt
+# 关键：io_uring 在某些 VPS 上会被 seccomp 拦，导致 openppp2 直接崩
+# 这里对 client 加 unconfined（server 若你也遇到同类问题，可自行加到 server）
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
   {
@@ -323,12 +377,14 @@ services:
     image: ${image}
     container_name: ${svc}
     restart: unless-stopped
-$(compose_security_opt_block)
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     volumes:
       - ./${cfg}:/opt/openppp2/${cfg}:ro
       - ./ip.txt:/opt/openppp2/ip.txt:ro
@@ -355,7 +411,6 @@ EOF
   } >"$COMPOSE_FILE"
 }
 
-# 新增客户端实例：同样移除三项参数
 append_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
   {
@@ -365,12 +420,14 @@ append_compose_client() {
     image: ${image}
     container_name: ${svc}
     restart: unless-stopped
-$(compose_security_opt_block)
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     volumes:
       - ./${cfg}:/opt/openppp2/${cfg}:ro
       - ./${ipfile}:/opt/openppp2/ip.txt:ro
@@ -460,24 +517,16 @@ health_check_one() {
     echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}" >&2
     exit 1
   fi
-
-  if docker logs "$svc" 2>/dev/null | tail -n 200 | grep -q 'io_uring_queue_init: Operation not permitted'; then
-    warn "检测到 io_uring 被拒绝（Operation not permitted）。"
-    warn "已默认写入 security_opt: seccomp=unconfined + apparmor=unconfined。"
-    warn "若仍失败，可能是宿主机虚拟化/安全策略限制 io_uring。"
-    echo "  查看日志：docker logs --tail=200 ${svc}" >&2
-    exit 1
-  fi
 }
 
 do_install() {
   ensure_docker_stack
 
-  echo "=============================="
-  echo "  请选择安装/部署角色："
-  echo "    1) 服务端（Server）"
-  echo "    2) 客户端（Client）"
-  echo "=============================="
+  echo "==============================" >&2
+  echo "  请选择安装/部署角色：" >&2
+  echo "    1) 服务端（Server）" >&2
+  echo "    2) 客户端（Client）" >&2
+  echo "==============================" >&2
   local ROLE
   prompt ROLE "请输入数字选择（1 或 2）" "1"
 
@@ -584,18 +633,18 @@ do_install() {
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
 
-    echo
-    echo "当前客户端配置信息："
-    echo "  配置文件：${APP_CFG_NAME}"
-    echo "  server   ：${SERVER_URI}"
-    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
-    echo "  HTTP     ：${lan}:${HTTP_PORT}"
-    echo "  tun-host ：no（已强制写入命令行参数）"
+    echo >&2
+    echo "当前客户端配置信息：" >&2
+    echo "  配置文件：${APP_CFG_NAME}" >&2
+    echo "  server   ：${SERVER_URI}" >&2
+    echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
+    echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
+    echo "  tun-host ：no（已强制写入命令行参数）" >&2
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
 
-  echo
+  echo >&2
   info "启动 openppp2..."
   cd "$APP_DIR"
   compose up -d --remove-orphans
@@ -608,10 +657,10 @@ do_install() {
 
   setup_systemd_weekly_update
 
-  echo
-  echo "===== 完成 ====="
-  echo "配置目录：${APP_DIR}"
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
+  echo >&2
+  echo "===== 完成 =====" >&2
+  echo "配置目录：${APP_DIR}" >&2
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>" >&2
 }
 
 do_uninstall() {
@@ -765,15 +814,15 @@ do_add_client() {
   compose up -d --remove-orphans "${SVC_NAME}"
   health_check_one "${SVC_NAME}"
 
-  echo
-  echo "当前新增客户端配置信息："
-  echo "  配置文件：${CFG_NAME}"
-  echo "  server   ：${SERVER_URI}"
-  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
-  echo "  HTTP     ：${lan}:${HTTP_PORT}"
-  echo "  tun-host ：no（已强制写入命令行参数）"
-  echo
-  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}"
+  echo >&2
+  echo "当前新增客户端配置信息：" >&2
+  echo "  配置文件：${CFG_NAME}" >&2
+  echo "  server   ：${SERVER_URI}" >&2
+  echo "  SOCKS5   ：${lan}:${SOCKS_PORT}" >&2
+  echo "  HTTP     ：${lan}:${HTTP_PORT}" >&2
+  echo "  tun-host ：no（已强制写入命令行参数）" >&2
+  echo >&2
+  echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f ${SVC_NAME}" >&2
 }
 
 do_show_info() {
@@ -809,6 +858,8 @@ do_show_info() {
     echo "以上为当前所有客户端配置的 server / SOCKS5 / HTTP 信息"
   fi
 }
+
+# ====== 选项 5：删除实例/配置 ======
 
 CLIENT_CFG_LIST=()
 
@@ -861,14 +912,14 @@ remove_service_block() {
 }
 
 select_cfg_interactive() {
-  echo
-  echo "可删除的客户端配置文件列表："
+  echo >&2
+  echo "可删除的客户端配置文件列表：" >&2
   print_client_cfgs
-  echo
-  echo "你可以："
-  echo "  - 输入编号（例如 2）"
-  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）"
-  echo
+  echo >&2
+  echo "你可以：" >&2
+  echo "  - 输入编号（例如 2）" >&2
+  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）" >&2
+  echo >&2
 
   local sel=""
   prompt sel "请输入要删除的配置（编号/名称/关键词）" ""
@@ -901,7 +952,7 @@ select_cfg_interactive() {
   fi
 
   if [[ "${#matches[@]}" -gt 1 ]]; then
-    echo
+    echo >&2
     warn "匹配到多个配置，请输入更精确的名称："
     local i=1
     for f in "${matches[@]}"; do
@@ -941,11 +992,11 @@ do_delete_client() {
   local svc=""
   svc="$(find_service_by_cfg "$cfg" || true)"
 
-  echo
-  echo "即将删除："
-  echo "  配置文件：$cfg"
-  echo "  对应服务：${svc:-（未能自动定位）}"
-  echo
+  echo >&2
+  echo "即将删除：" >&2
+  echo "  配置文件：$cfg" >&2
+  echo "  对应服务：${svc:-（未能自动定位）}" >&2
+  echo >&2
 
   local yesno
   prompt yesno "确认删除？输入 yes 继续" "no"
