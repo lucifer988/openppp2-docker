@@ -8,6 +8,11 @@ DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
 DEFAULT_BASE_CFG_URL="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
 DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
+# 关键修复：为 io_uring 放开容器 seccomp/apparmor 限制
+# （避免：io_uring_queue_init: Operation not permitted）
+DEFAULT_SECURITY_OPT_SECCOMP="seccomp=unconfined"
+DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
+
 COMPOSE_KIND="" # "docker compose" or "docker-compose"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -61,12 +66,10 @@ compose() {
 }
 
 detect_compose() {
-  # Prefer docker compose plugin
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
     COMPOSE_KIND="docker compose"
     return 0
   fi
-  # Fallback to legacy docker-compose
   if need_cmd docker-compose && docker-compose version >/dev/null 2>&1; then
     COMPOSE_KIND="docker-compose"
     return 0
@@ -78,12 +81,11 @@ detect_compose() {
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  # 保留 --no-install-recommends 但我们会显式补齐 docker-cli / docker-compose-plugin
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
 }
 
 curl_retry() {
-  curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 120 "$@"
+  curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 180 "$@"
 }
 
 force_apt_ipv4() {
@@ -128,53 +130,49 @@ docker_daemon_ok() {
   docker info >/dev/null 2>&1
 }
 
-wait_docker_ready() {
-  local i
-  for i in {1..30}; do
-    if docker_daemon_ok; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-install_compose_on_debian() {
-  # 优先安装 compose plugin（docker compose）
-  if need_cmd apt-get; then
-    apt_install docker-compose-plugin >/dev/null 2>&1 || true
-  fi
-}
-
-install_docker_stack_on_debian() {
-  # 关键修复：docker.io + docker-cli + docker-compose-plugin（不要依赖 recommends）
-  apt_install docker.io docker-cli docker-compose-plugin containerd runc >/dev/null 2>&1 || return 1
-  return 0
-}
-
-print_docker_diag() {
+print_docker_diagnose() {
   warn "Docker 诊断信息（用于排查 docker info 失败的真实原因）："
   warn "环境变量（可能污染 docker 连接目标）："
   echo "  DOCKER_HOST=${DOCKER_HOST-}" >&2
   echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT-}" >&2
-
   if has_systemd; then
     warn "systemctl status docker："
     systemctl status docker --no-pager -l || true
     warn "journalctl -u docker（最近 120 行）："
     journalctl -u docker -n 120 --no-pager || true
   else
-    warn "无 systemd，尝试 service docker status："
-    service docker status || true
+    warn "非 systemd 环境：请自行查看 docker daemon 日志。"
+  fi
+}
+
+install_docker_from_debian() {
+  info "尝试通过 Debian/Ubuntu 仓库安装 docker.io ..."
+  apt_install docker.io >/dev/null 2>&1 || return 1
+  start_docker_daemon_soft
+  return 0
+}
+
+install_docker_compose_plugin_if_missing() {
+  # 目标：确保 "docker compose" 可用（推荐），否则提供 docker-compose（兼容）
+  if need_cmd docker && docker compose version >/dev/null 2>&1; then
+    return 0
   fi
 
-  warn "docker/version/info（如果 docker CLI 存在）："
-  if need_cmd docker; then
-    docker version || true
-    docker info || true
-  else
-    warn "docker CLI 未找到（command -v docker 失败）。"
+  if need_cmd apt-get; then
+    # 优先安装 compose 插件（Debian/Ubuntu 常见包名）
+    apt_install docker-compose-plugin >/dev/null 2>&1 || true
   fi
+
+  if need_cmd docker && docker compose version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # 兜底：安装老版 docker-compose
+  if ! need_cmd docker-compose && need_cmd apt-get; then
+    apt_install docker-compose >/dev/null 2>&1 || true
+  fi
+
+  return 0
 }
 
 ensure_docker_stack() {
@@ -185,28 +183,19 @@ ensure_docker_stack() {
   else
     if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
       warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
-      if ! install_docker_stack_on_debian; then
-        warn "通过 apt 安装 docker.io/docker-cli/docker-compose-plugin 失败，请检查 apt 源/网络。"
-      fi
-      start_docker_daemon_soft
+      # 直接用 docker.io（你实际环境验证过可用）
+      install_docker_from_debian || warn "通过 apt 安装 docker.io 失败，请手动安装 Docker。"
     else
       warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
     fi
   fi
 
-  # 等待 docker ready
-  if ! wait_docker_ready; then
-    print_docker_diag
+  if ! docker_daemon_ok; then
+    print_docker_diagnose
     die "Docker daemon 不可用（或 docker CLI 无法连接）。请先确保 docker info 正常后再运行脚本。"
   fi
 
-  # compose 检测：若没有 compose，尝试安装 plugin 后再探测一次
-  if ! detect_compose; then
-    if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
-      warn "未检测到 docker compose 或 docker-compose，尝试安装 docker-compose-plugin ..."
-      install_compose_on_debian
-    fi
-  fi
+  install_docker_compose_plugin_if_missing
 
   if ! detect_compose; then
     die "未检测到 docker compose 或 docker-compose。请先安装 compose 后再运行脚本。"
@@ -300,6 +289,15 @@ compose_header() {
   fi
 }
 
+# --- 核心修复：给 openppp2 容器加 unconfined，避免 io_uring EPERM 崩溃 ---
+compose_security_opt_block() {
+  cat <<EOF
+    security_opt:
+      - ${DEFAULT_SECURITY_OPT_SECCOMP}
+      - ${DEFAULT_SECURITY_OPT_APPARMOR}
+EOF
+}
+
 write_compose_server() {
   local image="$1" cfg="$2"
   {
@@ -310,6 +308,7 @@ services:
     image: ${image}
     container_name: openppp2
     restart: unless-stopped
+$(compose_security_opt_block)
     volumes:
       - ./${cfg}:/opt/openppp2/appsettings.json:ro
     ports:
@@ -329,6 +328,7 @@ services:
     image: ${image}
     container_name: ${svc}
     restart: unless-stopped
+$(compose_security_opt_block)
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -370,6 +370,7 @@ append_compose_client() {
     image: ${image}
     container_name: ${svc}
     restart: unless-stopped
+$(compose_security_opt_block)
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -463,6 +464,15 @@ health_check_one() {
   if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
     warn "容器未运行：${svc}"
     echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}" >&2
+    exit 1
+  fi
+
+  # 额外检查：如果有 io_uring EPERM，给出明确诊断
+  if docker logs "$svc" 2>/dev/null | tail -n 200 | grep -q 'io_uring_queue_init: Operation not permitted'; then
+    warn "检测到 io_uring 被拒绝（Operation not permitted）。"
+    warn "已默认写入 security_opt: seccomp=unconfined + apparmor=unconfined。"
+    warn "若仍失败，可能是宿主机虚拟化/安全策略限制 io_uring。"
+    echo "  查看日志：docker logs --tail=200 ${svc}" >&2
     exit 1
   fi
 }
@@ -808,7 +818,6 @@ do_show_info() {
 }
 
 # ====== 选项 5：删除实例/配置（修复版）======
-
 CLIENT_CFG_LIST=()
 
 list_client_cfgs() {
