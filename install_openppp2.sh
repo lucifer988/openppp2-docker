@@ -95,31 +95,8 @@ detect_compose() {
 
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
-  
-  local proxy_cfg="/etc/apt/apt.conf.d/99temp-proxy"
-  
-  # 检测并配置 apt 代理
-  if [[ -n "${http_proxy:-}" || -n "${HTTP_PROXY:-}" ]]; then
-    local proxy="${http_proxy:-${HTTP_PROXY:-}}"
-    info "检测到代理环境变量，为 APT 配置代理：${proxy}"
-    cat > "$proxy_cfg" <<APTPROXYEOF
-Acquire::http::Proxy "${proxy}";
-Acquire::https::Proxy "${proxy}";
-APTPROXYEOF
-  fi
-  
-  info "正在更新软件包列表（最多等待 120 秒）..."
-  if timeout 120 apt-get update -y 2>&1 | grep -v "^Get:" | grep -v "^Hit:" | grep -v "^Ign:" || true; then
-    info "软件包列表更新完成"
-  else
-    warn "apt-get update 超时或失败，将继续尝试安装..."
-  fi
-  
-  info "正在安装必要工具：$*"
+  apt-get update -y
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
-  
-  # 清理临时代理配置
-  rm -f "$proxy_cfg" >/dev/null 2>&1 || true
 }
 
 curl_retry() {
@@ -144,33 +121,9 @@ APTEOF
 
 ensure_basic_tools() {
   force_apt_ipv4
-  
-  local missing_tools=()
-  
-  if ! need_cmd curl; then
-    missing_tools+=("curl")
+  if need_cmd apt-get; then
+    apt_install ca-certificates curl jq iproute2 gnupg >/dev/null 2>&1 || true
   fi
-  if ! need_cmd jq; then
-    missing_tools+=("jq")
-  fi
-  if ! need_cmd ip; then
-    missing_tools+=("iproute2")
-  fi
-  if ! need_cmd ss; then
-    missing_tools+=("iproute2")
-  fi
-  
-  if [[ "${#missing_tools[@]}" -gt 0 ]]; then
-    if need_cmd apt-get; then
-      info "检测到缺少工具，正在安装：${missing_tools[*]}"
-      apt_install ca-certificates curl jq iproute2 gnupg
-    else
-      die "缺少必要工具且无法自动安装（非 apt 环境）：${missing_tools[*]}"
-    fi
-  else
-    info "所有必要工具已安装。"
-  fi
-  
   need_cmd curl || die "curl 未安装成功，请手动安装 curl 后重试。"
   need_cmd jq   || die "jq 未安装成功，请手动安装 jq 后重试。"
   need_cmd ip   || die "ip 命令未找到，请安装 iproute2 后重试。"
@@ -209,7 +162,7 @@ print_docker_diagnose() {
 
 install_docker_from_debian() {
   info "尝试通过 Debian/Ubuntu 仓库安装 docker.io ..."
-  apt_install docker.io
+  apt_install docker.io >/dev/null 2>&1 || return 1
   start_docker_daemon_soft
   return 0
 }
@@ -220,8 +173,7 @@ install_docker_compose_plugin_if_missing() {
   fi
 
   if need_cmd apt-get; then
-    info "正在安装 docker-compose-plugin..."
-    apt_install docker-compose-plugin || true
+    apt_install docker-compose-plugin >/dev/null 2>&1 || true
   fi
 
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
@@ -229,8 +181,7 @@ install_docker_compose_plugin_if_missing() {
   fi
 
   if ! need_cmd docker-compose && need_cmd apt-get; then
-    info "正在安装 docker-compose（兼容模式）..."
-    apt_install docker-compose || true
+    apt_install docker-compose >/dev/null 2>&1 || true
   fi
 
   return 0
@@ -368,50 +319,438 @@ generate_seccomp_profile() {
   "syscalls": [
     {
       "names": [
-        "accept","accept4","access","adjtimex","alarm","bind","brk","capget","capset","chdir","chmod","chown","chown32","clock_adjtime","clock_adjtime64","clock_getres","clock_getres_time64","clock_gettime","clock_gettime64","clock_nanosleep","clock_nanosleep_time64","close","close_range","connect","copy_file_range","creat","dup","dup2","dup3","epoll_create","epoll_create1","epoll_ctl","epoll_ctl_old","epoll_pwait","epoll_pwait2","epoll_wait","epoll_wait_old","eventfd","eventfd2","execve","execveat","exit","exit_group","faccessat","faccessat2","fadvise64","fadvise64_64","fallocate","fanotify_mark","fchdir","fchmod","fchmodat","fchown","fchown32","fchownat","fcntl","fcntl64","fdatasync","fgetxattr","flistxattr","flock","fork","fremovexattr","fsetxattr","fstat","fstat64","fstatat64","fstatfs","fstatfs64","fsync","ftruncate","ftruncate64","futex","futex_time64","futimesat","getcpu","getcwd","getdents","getdents64","getegid","getegid32","geteuid","geteuid32","getgid","getgid32","getgroups","getgroups32","getitimer","getpeername","getpgid","getpgrp","getpid","getppid","getpriority","getrandom","getresgid","getresgid32","getresuid","getresuid32","getrlimit","get_robust_list","getrusage","getsid","getsockname","getsockopt","get_thread_area","gettid","gettimeofday","getuid","getuid32","getxattr","inotify_add_watch","inotify_init","inotify_init1","inotify_rm_watch","io_cancel","ioctl","io_destroy","io_getevents","io_pgetevents","io_pgetevents_time64","ioprio_get","ioprio_set","io_setup","io_submit","io_uring_enter","io_uring_register","io_uring_setup","ipc","kill","lchown","lchown32","lgetxattr","link","linkat","listen","listxattr","llistxattr","lremovexattr","lseek","lsetxattr","lstat","lstat64","madvise","membarrier","memfd_create","mincore","mkdir","mkdirat","mknod","mknodat","mlock","mlock2","mlockall","mmap","mmap2","mprotect","mq_getsetattr","mq_notify","mq_open","mq_timedreceive","mq_timedreceive_time64","mq_timedsend","mq_timedsend_time64","mq_unlink","mremap","msgctl","msgget","msgrcv","msgsnd","msync","munlock","munlockall","munmap","nanosleep","newfstatat","open","openat","openat2","pause","pipe","pipe2","poll","ppoll","ppoll_time64","prctl","pread64","preadv","preadv2","prlimit64","pselect6","pselect6_time64","pwrite64","pwritev","pwritev2","read","readahead","readlink","readlinkat","readv","recv","recvfrom","recvmmsg","recvmmsg_time64","recvmsg","remap_file_pages","removexattr","rename","renameat","renameat2","restart_syscall","rmdir","rt_sigaction","rt_sigpending","rt_sigprocmask","rt_sigqueueinfo","rt_sigreturn","rt_sigsuspend","rt_sigtimedwait","rt_sigtimedwait_time64","rt_tgsigqueueinfo","sched_getaffinity","sched_getattr","sched_getparam","sched_get_priority_max","sched_get_priority_min","sched_getscheduler","sched_rr_get_interval","sched_rr_get_interval_time64","sched_setaffinity","sched_setattr","sched_setparam","sched_setscheduler","sched_yield","seccomp","select","semctl","semget","semop","semtimedop","semtimedop_time64","send","sendfile","sendfile64","sendmmsg","sendmsg","sendto","setfsgid","setfsgid32","setfsuid","setfsuid32","setgid","setgid32","setgroups","setgroups32","setitimer","setpgid","setpriority","setregid","setregid32","setresgid","setresgid32","setresuid","setresuid32","setreuid","setreuid32","setrlimit","set_robust_list","setsid","setsockopt","set_thread_area","set_tid_address","setuid","setuid32","setxattr","shmat","shmctl","shmdt","shmget","shutdown","sigaltstack","signalfd","signalfd4","sigprocmask","sigreturn","socket","socketcall","socketpair","splice","stat","stat64","statfs","statfs64","statx","symlink","symlinkat","sync","sync_file_range","syncfs","sysinfo","tee","tgkill","time","timer_create","timer_delete","timer_getoverrun","timer_gettime","timer_gettime64","timer_settime","timer_settime64","timerfd_create","timerfd_gettime","timerfd_gettime64","timerfd_settime","timerfd_settime64","times","tkill","truncate","truncate64","ugetrlimit","umask","uname","unlink","unlinkat","utime","utimensat","utimensat_time64","utimes","vfork","vmsplice","wait4","waitid","waitpid","write","writev"
+        "accept",
+        "accept4",
+        "access",
+        "adjtimex",
+        "alarm",
+        "bind",
+        "brk",
+        "capget",
+        "capset",
+        "chdir",
+        "chmod",
+        "chown",
+        "chown32",
+        "clock_adjtime",
+        "clock_adjtime64",
+        "clock_getres",
+        "clock_getres_time64",
+        "clock_gettime",
+        "clock_gettime64",
+        "clock_nanosleep",
+        "clock_nanosleep_time64",
+        "close",
+        "close_range",
+        "connect",
+        "copy_file_range",
+        "creat",
+        "dup",
+        "dup2",
+        "dup3",
+        "epoll_create",
+        "epoll_create1",
+        "epoll_ctl",
+        "epoll_ctl_old",
+        "epoll_pwait",
+        "epoll_pwait2",
+        "epoll_wait",
+        "epoll_wait_old",
+        "eventfd",
+        "eventfd2",
+        "execve",
+        "execveat",
+        "exit",
+        "exit_group",
+        "faccessat",
+        "faccessat2",
+        "fadvise64",
+        "fadvise64_64",
+        "fallocate",
+        "fanotify_mark",
+        "fchdir",
+        "fchmod",
+        "fchmodat",
+        "fchown",
+        "fchown32",
+        "fchownat",
+        "fcntl",
+        "fcntl64",
+        "fdatasync",
+        "fgetxattr",
+        "flistxattr",
+        "flock",
+        "fork",
+        "fremovexattr",
+        "fsetxattr",
+        "fstat",
+        "fstat64",
+        "fstatat64",
+        "fstatfs",
+        "fstatfs64",
+        "fsync",
+        "ftruncate",
+        "ftruncate64",
+        "futex",
+        "futex_time64",
+        "futimesat",
+        "getcpu",
+        "getcwd",
+        "getdents",
+        "getdents64",
+        "getegid",
+        "getegid32",
+        "geteuid",
+        "geteuid32",
+        "getgid",
+        "getgid32",
+        "getgroups",
+        "getgroups32",
+        "getitimer",
+        "getpeername",
+        "getpgid",
+        "getpgrp",
+        "getpid",
+        "getppid",
+        "getpriority",
+        "getrandom",
+        "getresgid",
+        "getresgid32",
+        "getresuid",
+        "getresuid32",
+        "getrlimit",
+        "get_robust_list",
+        "getrusage",
+        "getsid",
+        "getsockname",
+        "getsockopt",
+        "get_thread_area",
+        "gettid",
+        "gettimeofday",
+        "getuid",
+        "getuid32",
+        "getxattr",
+        "inotify_add_watch",
+        "inotify_init",
+        "inotify_init1",
+        "inotify_rm_watch",
+        "io_cancel",
+        "ioctl",
+        "io_destroy",
+        "io_getevents",
+        "io_pgetevents",
+        "io_pgetevents_time64",
+        "ioprio_get",
+        "ioprio_set",
+        "io_setup",
+        "io_submit",
+        "io_uring_enter",
+        "io_uring_register",
+        "io_uring_setup",
+        "ipc",
+        "kill",
+        "lchown",
+        "lchown32",
+        "lgetxattr",
+        "link",
+        "linkat",
+        "listen",
+        "listxattr",
+        "llistxattr",
+        "lremovexattr",
+        "lseek",
+        "lsetxattr",
+        "lstat",
+        "lstat64",
+        "madvise",
+        "membarrier",
+        "memfd_create",
+        "mincore",
+        "mkdir",
+        "mkdirat",
+        "mknod",
+        "mknodat",
+        "mlock",
+        "mlock2",
+        "mlockall",
+        "mmap",
+        "mmap2",
+        "mprotect",
+        "mq_getsetattr",
+        "mq_notify",
+        "mq_open",
+        "mq_timedreceive",
+        "mq_timedreceive_time64",
+        "mq_timedsend",
+        "mq_timedsend_time64",
+        "mq_unlink",
+        "mremap",
+        "msgctl",
+        "msgget",
+        "msgrcv",
+        "msgsnd",
+        "msync",
+        "munlock",
+        "munlockall",
+        "munmap",
+        "nanosleep",
+        "newfstatat",
+        "open",
+        "openat",
+        "openat2",
+        "pause",
+        "pipe",
+        "pipe2",
+        "poll",
+        "ppoll",
+        "ppoll_time64",
+        "prctl",
+        "pread64",
+        "preadv",
+        "preadv2",
+        "prlimit64",
+        "pselect6",
+        "pselect6_time64",
+        "pwrite64",
+        "pwritev",
+        "pwritev2",
+        "read",
+        "readahead",
+        "readlink",
+        "readlinkat",
+        "readv",
+        "recv",
+        "recvfrom",
+        "recvmmsg",
+        "recvmmsg_time64",
+        "recvmsg",
+        "remap_file_pages",
+        "removexattr",
+        "rename",
+        "renameat",
+        "renameat2",
+        "restart_syscall",
+        "rmdir",
+        "rt_sigaction",
+        "rt_sigpending",
+        "rt_sigprocmask",
+        "rt_sigqueueinfo",
+        "rt_sigreturn",
+        "rt_sigsuspend",
+        "rt_sigtimedwait",
+        "rt_sigtimedwait_time64",
+        "rt_tgsigqueueinfo",
+        "sched_getaffinity",
+        "sched_getattr",
+        "sched_getparam",
+        "sched_get_priority_max",
+        "sched_get_priority_min",
+        "sched_getscheduler",
+        "sched_rr_get_interval",
+        "sched_rr_get_interval_time64",
+        "sched_setaffinity",
+        "sched_setattr",
+        "sched_setparam",
+        "sched_setscheduler",
+        "sched_yield",
+        "seccomp",
+        "select",
+        "semctl",
+        "semget",
+        "semop",
+        "semtimedop",
+        "semtimedop_time64",
+        "send",
+        "sendfile",
+        "sendfile64",
+        "sendmmsg",
+        "sendmsg",
+        "sendto",
+        "setfsgid",
+        "setfsgid32",
+        "setfsuid",
+        "setfsuid32",
+        "setgid",
+        "setgid32",
+        "setgroups",
+        "setgroups32",
+        "setitimer",
+        "setpgid",
+        "setpriority",
+        "setregid",
+        "setregid32",
+        "setresgid",
+        "setresgid32",
+        "setresuid",
+        "setresuid32",
+        "setreuid",
+        "setreuid32",
+        "setrlimit",
+        "set_robust_list",
+        "setsid",
+        "setsockopt",
+        "set_thread_area",
+        "set_tid_address",
+        "setuid",
+        "setuid32",
+        "setxattr",
+        "shmat",
+        "shmctl",
+        "shmdt",
+        "shmget",
+        "shutdown",
+        "sigaltstack",
+        "signalfd",
+        "signalfd4",
+        "sigprocmask",
+        "sigreturn",
+        "socket",
+        "socketcall",
+        "socketpair",
+        "splice",
+        "stat",
+        "stat64",
+        "statfs",
+        "statfs64",
+        "statx",
+        "symlink",
+        "symlinkat",
+        "sync",
+        "sync_file_range",
+        "syncfs",
+        "sysinfo",
+        "tee",
+        "tgkill",
+        "time",
+        "timer_create",
+        "timer_delete",
+        "timer_getoverrun",
+        "timer_gettime",
+        "timer_gettime64",
+        "timer_settime",
+        "timer_settime64",
+        "timerfd_create",
+        "timerfd_gettime",
+        "timerfd_gettime64",
+        "timerfd_settime",
+        "timerfd_settime64",
+        "times",
+        "tkill",
+        "truncate",
+        "truncate64",
+        "ugetrlimit",
+        "umask",
+        "uname",
+        "unlink",
+        "unlinkat",
+        "utime",
+        "utimensat",
+        "utimensat_time64",
+        "utimes",
+        "vfork",
+        "vmsplice",
+        "wait4",
+        "waitid",
+        "waitpid",
+        "write",
+        "writev"
       ],
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "names": ["personality"],
+      "names": [
+        "personality"
+      ],
       "action": "SCMP_ACT_ALLOW",
-      "args": [{"index": 0,"value": 0,"op": "SCMP_CMP_EQ"}]
+      "args": [
+        {
+          "index": 0,
+          "value": 0,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
     },
     {
-      "names": ["personality"],
+      "names": [
+        "personality"
+      ],
       "action": "SCMP_ACT_ALLOW",
-      "args": [{"index": 0,"value": 8,"op": "SCMP_CMP_EQ"}]
+      "args": [
+        {
+          "index": 0,
+          "value": 8,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
     },
     {
-      "names": ["personality"],
+      "names": [
+        "personality"
+      ],
       "action": "SCMP_ACT_ALLOW",
-      "args": [{"index": 0,"value": 131072,"op": "SCMP_CMP_EQ"}]
+      "args": [
+        {
+          "index": 0,
+          "value": 131072,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
     },
     {
-      "names": ["personality"],
+      "names": [
+        "personality"
+      ],
       "action": "SCMP_ACT_ALLOW",
-      "args": [{"index": 0,"value": 131080,"op": "SCMP_CMP_EQ"}]
+      "args": [
+        {
+          "index": 0,
+          "value": 131080,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
     },
     {
-      "names": ["personality"],
+      "names": [
+        "personality"
+      ],
       "action": "SCMP_ACT_ALLOW",
-      "args": [{"index": 0,"value": 4294967295,"op": "SCMP_CMP_EQ"}]
+      "args": [
+        {
+          "index": 0,
+          "value": 4294967295,
+          "op": "SCMP_CMP_EQ"
+        }
+      ]
     },
     {
-      "names": ["arch_prctl"],
+      "names": [
+        "arch_prctl"
+      ],
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "names": ["modify_ldt"],
+      "names": [
+        "modify_ldt"
+      ],
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "names": ["clone"],
+      "names": [
+        "clone"
+      ],
       "action": "SCMP_ACT_ALLOW",
-      "args": [{"index": 0,"value": 2114060288,"op": "SCMP_CMP_MASKED_EQ"}]
+      "args": [
+        {
+          "index": 0,
+          "value": 2114060288,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ]
     },
     {
-      "names": ["clone3"],
+      "names": [
+        "clone3"
+      ],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 38
     }
@@ -420,54 +759,6 @@ generate_seccomp_profile() {
 SECCOMPEOF
   
   info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
-}
-
-setup_docker_proxy() {
-  local proxy_ip="$1"
-  local proxy_port="$2"
-  
-  if ! has_systemd; then
-    warn "非 systemd 环境，无法自动配置 Docker 代理。"
-    return 1
-  fi
-  
-  info "配置 Docker HTTP 代理：${proxy_ip}:${proxy_port}"
-  
-  mkdir -p /etc/systemd/system/docker.service.d
-  
-  cat > /etc/systemd/system/docker.service.d/http-proxy.conf <<PROXYEOF
-[Service]
-Environment="HTTP_PROXY=http://${proxy_ip}:${proxy_port}"
-Environment="HTTPS_PROXY=http://${proxy_ip}:${proxy_port}"
-PROXYEOF
-  
-  systemctl daemon-reload
-  systemctl restart docker
-  
-  sleep 2
-  
-  if ! docker_daemon_ok; then
-    warn "Docker 重启后无法连接，可能代理配置有误。"
-    return 1
-  fi
-  
-  info "Docker 代理配置成功"
-  return 0
-}
-
-remove_docker_proxy() {
-  if ! has_systemd; then
-    return 0
-  fi
-  
-  if [[ -f /etc/systemd/system/docker.service.d/http-proxy.conf ]]; then
-    info "删除 Docker 代理配置..."
-    rm -f /etc/systemd/system/docker.service.d/http-proxy.conf
-    systemctl daemon-reload
-    systemctl restart docker
-    sleep 2
-    info "Docker 代理配置已删除"
-  fi
 }
 
 compose_header() {
@@ -587,7 +878,7 @@ setup_systemd_weekly_update() {
     return 0
   fi
 
-  echo
+  echo >&2
   info "设置 systemd 每周自动更新（pull + up -d）"
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
@@ -687,9 +978,7 @@ do_install() {
       prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" ""
     fi
 
-    jq --arg ip "$SERVER_PUBLIC_IP" \
-       '.ip.public=$ip | .ip.interface=$ip' \
-       appsettings.base.json > "$APP_CFG_NAME"
+    jq --arg ip "$SERVER_PUBLIC_IP" '.ip.public=$ip | .ip.interface=$ip' appsettings.base.json > "$APP_CFG_NAME"
 
     write_compose_server "$IMAGE" "$APP_CFG_NAME"
     echo "server" > "${APP_DIR}/.role"
@@ -745,12 +1034,12 @@ do_install() {
     done
 
     jq --arg srv "$SERVER_URI" \
-       --arg guid "$guid" \
-       --arg lan "$lan" \
-       --argjson hport "$HTTP_PORT" \
-       --argjson sport "$SOCKS_PORT" \
-       '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
-       appsettings.base.json > "$APP_CFG_NAME"
+      --arg guid "$guid" \
+      --arg lan "$lan" \
+      --argjson hport "$HTTP_PORT" \
+      --argjson sport "$SOCKS_PORT" \
+      '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
+      appsettings.base.json > "$APP_CFG_NAME"
 
     [[ -f ip.txt ]] || : > ip.txt
     [[ -f dns-rules.txt ]] || : > dns-rules.txt
@@ -773,24 +1062,6 @@ do_install() {
     echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
     echo "  HTTP     ：${lan}:${HTTP_PORT}"
     echo "  tun-host ：no（已强制写入命令行参数）"
-    
-    echo
-    local USE_PROXY
-    prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
-    
-    local proxy_configured=0
-    if [[ "$USE_PROXY" == "yes" ]]; then
-      local PROXY_IP PROXY_PORT
-      prompt PROXY_IP "请输入代理服务器 IP 地址" ""
-      prompt_port PROXY_PORT "请输入代理服务器端口" "7890"
-      
-      if setup_docker_proxy "$PROXY_IP" "$PROXY_PORT"; then
-        proxy_configured=1
-      else
-        warn "代理配置失败，将不使用代理继续安装。"
-      fi
-    fi
-    
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
@@ -801,10 +1072,6 @@ do_install() {
   compose up -d --remove-orphans
 
   if [[ "$ROLE" == "2" ]]; then
-    if [[ "$proxy_configured" -eq 1 ]]; then
-      remove_docker_proxy
-    fi
-    
     health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
   else
     health_check_one "openppp2"
@@ -853,8 +1120,6 @@ do_uninstall() {
 
   rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
   sysctl --system >/dev/null 2>&1 || true
-  
-  remove_docker_proxy
 
   echo "卸载完成。"
 }
@@ -959,12 +1224,12 @@ do_add_client() {
   done
 
   jq --arg srv "$SERVER_URI" \
-     --arg guid "$guid" \
-     --arg lan "$lan" \
-     --argjson hport "$HTTP_PORT" \
-     --argjson sport "$SOCKS_PORT" \
-     '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
-     appsettings.base.json > "${CFG_NAME}"
+    --arg guid "$guid" \
+    --arg lan "$lan" \
+    --argjson hport "$HTTP_PORT" \
+    --argjson sport "$SOCKS_PORT" \
+    '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
+    appsettings.base.json > "${CFG_NAME}"
 
   [[ -f "$ipfile" ]] || : > "$ipfile"
   [[ -f "$dnsfile" ]] || : > "$dnsfile"
@@ -973,30 +1238,8 @@ do_add_client() {
 
   append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}"
 
-  echo
-  local USE_PROXY
-  prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
-  
-  local proxy_configured=0
-  if [[ "$USE_PROXY" == "yes" ]]; then
-    local PROXY_IP PROXY_PORT
-    prompt PROXY_IP "请输入代理服务器 IP 地址" ""
-    prompt_port PROXY_PORT "请输入代理服务器端口" "7890"
-    
-    if setup_docker_proxy "$PROXY_IP" "$PROXY_PORT"; then
-      proxy_configured=1
-    else
-      warn "代理配置失败，将不使用代理继续安装。"
-    fi
-  fi
-
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
-  
-  if [[ "$proxy_configured" -eq 1 ]]; then
-    remove_docker_proxy
-  fi
-  
   health_check_one "${SVC_NAME}"
 
   echo
