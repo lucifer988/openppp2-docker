@@ -761,6 +761,54 @@ SECCOMPEOF
   info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
 }
 
+setup_docker_proxy() {
+  local proxy_ip="$1"
+  local proxy_port="$2"
+  
+  if ! has_systemd; then
+    warn "非 systemd 环境，无法自动配置 Docker 代理。"
+    return 1
+  fi
+  
+  info "配置 Docker HTTP 代理：${proxy_ip}:${proxy_port}"
+  
+  mkdir -p /etc/systemd/system/docker.service.d
+  
+  cat > /etc/systemd/system/docker.service.d/http-proxy.conf <<PROXYEOF
+[Service]
+Environment="HTTP_PROXY=http://${proxy_ip}:${proxy_port}"
+Environment="HTTPS_PROXY=http://${proxy_ip}:${proxy_port}"
+PROXYEOF
+  
+  systemctl daemon-reload
+  systemctl restart docker
+  
+  sleep 2
+  
+  if ! docker_daemon_ok; then
+    warn "Docker 重启后无法连接，可能代理配置有误。"
+    return 1
+  fi
+  
+  info "Docker 代理配置成功"
+  return 0
+}
+
+remove_docker_proxy() {
+  if ! has_systemd; then
+    return 0
+  fi
+  
+  if [[ -f /etc/systemd/system/docker.service.d/http-proxy.conf ]]; then
+    info "删除 Docker 代理配置..."
+    rm -f /etc/systemd/system/docker.service.d/http-proxy.conf
+    systemctl daemon-reload
+    systemctl restart docker
+    sleep 2
+    info "Docker 代理配置已删除"
+  fi
+}
+
 compose_header() {
   if [[ "$COMPOSE_KIND" == "docker-compose" ]]; then
     echo 'version: "3.8"'
@@ -878,7 +926,7 @@ setup_systemd_weekly_update() {
     return 0
   fi
 
-  echo >&2
+  echo
   info "设置 systemd 每周自动更新（pull + up -d）"
   local oncal
   prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
@@ -930,7 +978,7 @@ TIMEREOF
 
 health_check_one() {
   local svc="$1"
-  if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
+  if ! docker ps --format 'x "$svc"; then
     warn "容器未运行：${svc}"
     echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}" >&2
     exit 1
@@ -1062,6 +1110,24 @@ do_install() {
     echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
     echo "  HTTP     ：${lan}:${HTTP_PORT}"
     echo "  tun-host ：no（已强制写入命令行参数）"
+    
+    echo
+    local USE_PROXY
+    prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
+    
+    local proxy_configured=0
+    if [[ "$USE_PROXY" == "yes" ]]; then
+      local PROXY_IP PROXY_PORT
+      prompt PROXY_IP "请输入代理服务器 IP 地址" ""
+      prompt_port PROXY_PORT "请输入代理服务器端口" "7890"
+      
+      if setup_docker_proxy "$PROXY_IP" "$PROXY_PORT"; then
+        proxy_configured=1
+      else
+        warn "代理配置失败，将不使用代理继续安装。"
+      fi
+    fi
+    
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
@@ -1072,6 +1138,10 @@ do_install() {
   compose up -d --remove-orphans
 
   if [[ "$ROLE" == "2" ]]; then
+    if [[ "$proxy_configured" -eq 1 ]]; then
+      remove_docker_proxy
+    fi
+    
     health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
   else
     health_check_one "openppp2"
@@ -1084,7 +1154,7 @@ do_install() {
   echo "配置目录：${APP_DIR}"
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
   echo
-  info "安全配置：使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
+  info "安全配置:使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
 }
 
 do_uninstall() {
@@ -1120,6 +1190,8 @@ do_uninstall() {
 
   rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
   sysctl --system >/dev/null 2>&1 || true
+  
+  remove_docker_proxy
 
   echo "卸载完成。"
 }
@@ -1159,8 +1231,7 @@ do_add_client() {
   fi
 
   local SERVER_IP SERVER_PORT guid lan nic gw netinfo
-  prompt SERVER_IP "请输入新增客户端要连接的服务端 IP（例如 1.2.3.4）" ""
-  prompt_port SERVER_PORT "请输入新增客户端要连接的服务端端口（例如 20000）" "20000"
+  prompt SERVER_IP "请输入新增客户端要连接的服务端 IP（入新增客户端要连接的服务端端口（例如 20000）" "20000"
 
   guid="$(gen_guid)"
   netinfo="$(detect_net)"
@@ -1238,8 +1309,30 @@ do_add_client() {
 
   append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}"
 
+  echo
+  local USE_PROXY
+  prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
+  
+  local proxy_configured=0
+  if [[ "$USE_PROXY" == "yes" ]]; then
+    local PROXY_IP PROXY_PORT
+    prompt PROXY_IP "请输入代理服务器 IP 地址" ""
+    prompt_port PROXY_PORT "请输入代理服务器端口" "7890"
+    
+    if setup_docker_proxy "$PROXY_IP" "$PROXY_PORT"; then
+      proxy_configured=1
+    else
+      warn "代理配置失败，将不使用代理继续安装。"
+    fi
+  fi
+
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
+  
+  if [[ "$proxy_configured" -eq 1 ]]; then
+    remove_docker_proxy
+  fi
+  
   health_check_one "${SVC_NAME}"
 
   echo
@@ -1292,9 +1385,7 @@ CLIENT_CFG_LIST=()
 list_client_cfgs() {
   cd "$APP_DIR"
   CLIENT_CFG_LIST=()
-  local f
-  for f in appsettings*.json; do
-    [[ -f "$f" ]] || continue
+  local f || continue
     [[ "$f" == "appsettings.base.json" ]] && continue
     if jq -e '.client.server? // empty' "$f" >/dev/null 2>&1; then
       CLIENT_CFG_LIST+=("$f")
