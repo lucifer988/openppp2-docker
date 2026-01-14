@@ -95,9 +95,14 @@ detect_compose() {
 
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
-  
+
+  # === FIX: avoid needrestart interactive prompt blocking scripts ===
+  export NEEDRESTART_MODE=a
+  export NEEDRESTART_SUSPEND=1
+  # ================================================================
+
   local proxy_cfg="/etc/apt/apt.conf.d/99temp-proxy"
-  
+
   if [[ -n "${http_proxy:-}" || -n "${HTTP_PROXY:-}" ]]; then
     local proxy="${http_proxy:-${HTTP_PROXY:-}}"
     info "检测到代理环境变量，为 APT 配置代理：${proxy}"
@@ -106,17 +111,17 @@ Acquire::http::Proxy "${proxy}";
 Acquire::https::Proxy "${proxy}";
 APTPROXYEOF
   fi
-  
+
   info "正在更新软件包列表（最多等待 120 秒）..."
   if timeout 120 apt-get update -y 2>&1 | grep -v "^Get:" | grep -v "^Hit:" | grep -v "^Ign:" || true; then
     info "软件包列表更新完成"
   else
     warn "apt-get update 超时或失败，将继续尝试安装..."
   fi
-  
+
   info "正在安装必要工具：$*"
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
-  
+
   rm -f "$proxy_cfg" >/dev/null 2>&1 || true
 }
 
@@ -142,9 +147,9 @@ APTEOF
 
 ensure_basic_tools() {
   force_apt_ipv4
-  
+
   local missing_tools=()
-  
+
   if ! need_cmd curl; then
     missing_tools+=("curl")
   fi
@@ -157,18 +162,18 @@ ensure_basic_tools() {
   if ! need_cmd ss; then
     missing_tools+=("iproute2")
   fi
-  
+
   missing_tools=($(printf '%s\n' "${missing_tools[@]}" | sort -u))
-  
+
   if [[ "${#missing_tools[@]}" -gt 0 ]]; then
     if need_cmd apt-get; then
       info "检测到缺少工具：${missing_tools[*]}"
-      
+
       if [[ -z "${http_proxy:-}" && -z "${HTTP_PROXY:-}" ]]; then
         echo
         local USE_APT_PROXY
         prompt USE_APT_PROXY "是否需要为 APT 配置 HTTP 代理加速下载？（yes/no）" "no"
-        
+
         if [[ "$USE_APT_PROXY" == "yes" ]]; then
           local APT_PROXY_URL
           prompt APT_PROXY_URL "请输入 APT 代理地址（例如 http://127.0.0.1:7890）" "http://127.0.0.1:7890"
@@ -177,7 +182,7 @@ ensure_basic_tools() {
           info "已设置代理：${APT_PROXY_URL}"
         fi
       fi
-      
+
       apt_install ca-certificates curl jq iproute2 gnupg
     else
       die "缺少必要工具且无法自动安装（非 apt 环境）：${missing_tools[*]}"
@@ -185,7 +190,7 @@ ensure_basic_tools() {
   else
     info "所有必要工具已安装。"
   fi
-  
+
   need_cmd curl || die "curl 未安装成功，请手动安装 curl 后重试。"
   need_cmd jq   || die "jq 未安装成功，请手动安装 jq 后重试。"
   need_cmd ip   || die "ip 命令未找到，请安装 iproute2 后重试。"
@@ -202,9 +207,12 @@ start_docker_daemon_soft() {
   fi
 }
 
+# === FIX: correct daemon check (original had a syntax/logic bug) ===
 docker_daemon_ok() {
-  need_cmd docker || return 1 info >/dev/null 2>&1
+  need_cmd docker || return 1
+  docker info >/dev/null 2>&1
 }
+# =================================================================
 
 print_docker_diagnose() {
   warn "Docker 诊断信息（用于排查 docker info 失败的真实原因）："
@@ -256,12 +264,14 @@ ensure_docker_stack() {
   if docker_daemon_ok; then
     info "已检测到可用的 Docker 环境。"
   else
-    if need_cmd apt-get && [[ -f /etc/debian_version ]]; then
-      warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 Docker ..."
+    # === FIX: Debian + Ubuntu both use apt; don't rely on /etc/debian_version ===
+    if need_cmd apt-get; then
+      warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 docker.io ..."
       install_docker_from_debian || warn "通过 apt 安装 docker.io 失败，请手动安装 Docker。"
     else
-      warn "系统未检测到 docker，且无法自动安装（非 apt 或非 Debian/Ubuntu）。"
+      warn "系统未检测到 docker，且无法自动安装（非 apt 环境）。"
     fi
+    # ==========================================================================
   fi
 
   if ! docker_daemon_ok; then
@@ -359,7 +369,7 @@ SYSCTLEOF
 generate_seccomp_profile() {
   local seccomp_file="$1"
   info "生成自定义 seccomp 配置文件：${seccomp_file}"
-  
+
   cat > "$seccomp_file" <<'SECCOMPEOF'
 {
   "defaultAction": "SCMP_ACT_ERRNO",
@@ -432,39 +442,39 @@ generate_seccomp_profile() {
   ]
 }
 SECCOMPEOF
-  
+
   info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
 }
 
 setup_docker_proxy() {
   local proxy_ip="$1"
   local proxy_port="$2"
-  
+
   if ! has_systemd; then
     warn "非 systemd 环境，无法自动配置 Docker 代理。"
     return 1
   fi
-  
+
   info "配置 Docker HTTP 代理：${proxy_ip}:${proxy_port}"
-  
+
   mkdir -p /etc/systemd/system/docker.service.d
-  
+
   cat > /etc/systemd/system/docker.service.d/http-proxy.conf <<PROXYEOF
 [Service]
 Environment="HTTP_PROXY=http://${proxy_ip}:${proxy_port}"
 Environment="HTTPS_PROXY=http://${proxy_ip}:${proxy_port}"
 PROXYEOF
-  
+
   systemctl daemon-reload
   systemctl restart docker
-  
+
   sleep 2
-  
+
   if ! docker_daemon_ok; then
     warn "Docker 重启后无法连接，可能代理配置有误。"
     return 1
   fi
-  
+
   info "Docker 代理配置成功"
   return 0
 }
@@ -473,7 +483,7 @@ remove_docker_proxy() {
   if ! has_systemd; then
     return 0
   fi
-  
+
   if [[ -f /etc/systemd/system/docker.service.d/http-proxy.conf ]]; then
     info "删除 Docker 代理配置..."
     rm -f /etc/systemd/system/docker.service.d/http-proxy.conf
@@ -787,24 +797,24 @@ do_install() {
     echo "  SOCKS5   ：${lan}:${SOCKS_PORT}"
     echo "  HTTP     ：${lan}:${HTTP_PORT}"
     echo "  tun-host ：no（已强制写入命令行参数）"
-    
+
     echo
     local USE_PROXY
     prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
-    
+
     local proxy_configured=0
     if [[ "$USE_PROXY" == "yes" ]]; then
       local PROXY_IP PROXY_PORT
       prompt PROXY_IP "请输入代理服务器 IP 地址" ""
       prompt_port PROXY_PORT "请输入代理服务器端口" "7890"
-      
+
       if setup_docker_proxy "$PROXY_IP" "$PROXY_PORT"; then
         proxy_configured=1
       else
         warn "代理配置失败，将不使用代理继续安装。"
       fi
     fi
-    
+
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
@@ -818,7 +828,7 @@ do_install() {
     if [[ "$proxy_configured" -eq 1 ]]; then
       remove_docker_proxy
     fi
-    
+
     health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
   else
     health_check_one "openppp2"
@@ -867,7 +877,7 @@ do_uninstall() {
 
   rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
   sysctl --system >/dev/null 2>&1 || true
-  
+
   remove_docker_proxy
 
   echo "卸载完成。"
@@ -950,10 +960,11 @@ do_add_client() {
   local SVC_NAME
   prompt SVC_NAME "请输入新客户端实例名称（容器/服务名）" "$default_svc"
 
-  # ✅ 仅此一行已修复：正确匹配两格缩进的 service key，避免重复定义
+  # === small robustness: check under services indentation ===
   if grep -qE "^[[:space:]]{2}${SVC_NAME}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null; then
     die "服务名 ${SVC_NAME} 已存在，请换一个名称。"
   fi
+  # =========================================================
 
   local cfg_default="appsettings-${SVC_NAME}.json"
   local CFG_NAME
@@ -992,13 +1003,13 @@ do_add_client() {
   echo
   local USE_PROXY
   prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
-  
+
   local proxy_configured=0
   if [[ "$USE_PROXY" == "yes" ]]; then
     local PROXY_IP PROXY_PORT
     prompt PROXY_IP "请输入代理服务器 IP 地址" ""
     prompt_port PROXY_PORT "请输入代理服务器端口" "7890"
-    
+
     if setup_docker_proxy "$PROXY_IP" "$PROXY_PORT"; then
       proxy_configured=1
     else
@@ -1008,11 +1019,11 @@ do_add_client() {
 
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
-  
+
   if [[ "$proxy_configured" -eq 1 ]]; then
     remove_docker_proxy
   fi
-  
+
   health_check_one "${SVC_NAME}"
 
   echo
