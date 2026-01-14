@@ -98,7 +98,6 @@ apt_install() {
   
   local proxy_cfg="/etc/apt/apt.conf.d/99temp-proxy"
   
-  # 检测并配置 apt 代理
   if [[ -n "${http_proxy:-}" || -n "${HTTP_PROXY:-}" ]]; then
     local proxy="${http_proxy:-${HTTP_PROXY:-}}"
     info "检测到代理环境变量，为 APT 配置代理：${proxy}"
@@ -118,7 +117,6 @@ APTPROXYEOF
   info "正在安装必要工具：$*"
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
   
-  # 清理临时代理配置
   rm -f "$proxy_cfg" >/dev/null 2>&1 || true
 }
 
@@ -160,14 +158,12 @@ ensure_basic_tools() {
     missing_tools+=("iproute2")
   fi
   
-  # 去重
   missing_tools=($(printf '%s\n' "${missing_tools[@]}" | sort -u))
   
   if [[ "${#missing_tools[@]}" -gt 0 ]]; then
     if need_cmd apt-get; then
       info "检测到缺少工具：${missing_tools[*]}"
       
-      # 询问是否需要配置 APT 代理
       if [[ -z "${http_proxy:-}" && -z "${HTTP_PROXY:-}" ]]; then
         echo
         local USE_APT_PROXY
@@ -207,8 +203,7 @@ start_docker_daemon_soft() {
 }
 
 docker_daemon_ok() {
-  need_cmd docker || return 1
-  docker info >/dev/null 2>&1
+  need_cmd docker || return 1 info >/dev/null 2>&1
 }
 
 print_docker_diagnose() {
@@ -1083,7 +1078,7 @@ print_client_cfgs() {
   local i=1
   local f
   for f in "${CLIENT_CFG_LIST[@]}"; do
-    echo "  $i) $f"
+    echo "  $i) $f" >&2
     i=$(( i + 1 ))
   done
 }
@@ -1114,17 +1109,17 @@ remove_service_block() {
 }
 
 select_cfg_interactive() {
-  echo
-  echo "可删除的客户端配置文件列表："
+  echo >&2
+  echo "可删除的客户端配置文件列表：" >&2
   print_client_cfgs
-  echo
-  echo "你可以："
-  echo "  - 输入编号（例如 2）"
-  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）"
-  echo
+  echo >&2
+  echo "你可以：" >&2
+  echo "  - 输入编号（例如 2）" >&2
+  echo "  - 或输入配置文件名/关键词（例如 RFCHK 或 appsettings-RFCHK.json）" >&2
+  echo >&2
 
   local sel=""
-  prompt sel "请输入要删除的配置（编号/名称/关键词）" ""
+  read -r -p "请输入要删除的配置（编号/名称/关键词）: " sel
 
   if [[ "$sel" =~ ^[0-9]+$ ]]; then
     local idx="$sel"
@@ -1156,11 +1151,11 @@ select_cfg_interactive() {
   fi
 
   if [[ "${#matches[@]}" -gt 1 ]]; then
-    echo
+    echo >&2
     warn "匹配到多个配置，请输入更精确的名称："
     local i=1
     for f in "${matches[@]}"; do
-      echo "  $i) $f"
+      echo "  $i) $f" >&2
       i=$(( i + 1 ))
     done
     die "请重新运行选项 5 并输入更精确的关键词/文件名。"
