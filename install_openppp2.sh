@@ -318,7 +318,7 @@ detect_net() {
   if [[ -z "${dev:-}" || -z "${lan:-}" ]]; then
     out="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
     lan="$(awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$out")"
-    dev="${dev:-$(awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
+    dev="${dev:-$(F;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
     gw="${gw:-$(awk '/via/ {for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$out")}"
   fi
 
@@ -820,7 +820,7 @@ do_install() {
       remove_docker_proxy
     fi
     
-    health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
+    health_check_one "$( 2>/dev/null || echo openppp2)"
   else
     health_check_one "openppp2"
   fi
@@ -874,9 +874,7 @@ do_uninstall() {
   echo "卸载完成。"
 }
 
-check_service_exists() {
-  local svc="$1"
-  grep -qE "^[[:space:]]*${svc}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null
+check_service_existssvc}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null
 }
 
 do_add_client() {
@@ -896,8 +894,8 @@ do_add_client() {
 
   cd "$APP_DIR"
 
-  if [[ ! -f "$SECCOMP_FILE" ]]; then
-    info "未找到 seccomp 配置文件，正在生成..."
+  if [[ ! -f "$SEC
+    infoCOMP_FILE" ]]; then "未找到 seccomp 配置文件，正在生成..."
     generate_seccomp_profile "$SECCOMP_FILE"
   fi
 
@@ -1143,9 +1141,9 @@ remove_service_block() {
       
       line=$0
       gsub(/^[[:space:]]+/, "", line)
-      gsub(/:[[:space:]]*$/, "", line)
+      gsub(/:[[:space:]]*$/, "", line (base)
       
-      if (line == svc && (base_indent == -1 || current_indent <= 2)) {
+      if (line == svc &&_indent == -1 || current_indent <= 2)) {
         inblock=1
         base_indent=current_indent
         next
@@ -1240,8 +1238,6 @@ do_delete_client() {
 
   if ! list_client_cfgs; then
     echo "未找到可删除的客户端配置文件。"
-    return 0
-  fi
 
   local cfg
   cfg="$(select_cfg_interactive)"
@@ -1282,7 +1278,7 @@ do_delete_client() {
   compose up -d --remove-orphans >/dev/null 2>&1 || true
 
   echo
-  echo "删除完成。建议用 4) 查看客户端配置和代理信息 确认结果。"
+  echo "删除完成。建议查看配置确认结果。"
 }
 
 check_env_supported() {
@@ -1304,7 +1300,13 @@ main() {
   echo "=============================="
 
   local ACTION
-  prompt ACTION "请输入数字选择（1 / 2 / 3 /do_delete_client ;;
+  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4）" "1"
+
+  case "$ACTION" in
+    1) do_install ;;
+    2) do_uninstall ;;
+    3) do_add_client ;;
+    4) do_delete_client ;;
     *) die "输入错误，只能是 1 / 2 / 3 / 4。" ;;
   esac
 }
