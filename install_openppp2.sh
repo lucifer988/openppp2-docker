@@ -1113,11 +1113,11 @@ find_service_by_cfg() {
   awk -v cfg="$cfg" '
     BEGIN{svc=""; in_service=0}
     /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ {
-      match($0, /^[[:space:]]*([A-Za-z0-9_-]+):/, arr)
-      svc=arr[1]
+      svc=$1
+      gsub(/^[[:space:]]+|:[[:space:]]*$/, "", svc)
       in_service=1
     }
-    in_service==1 && $0 ~ cfg {
+    in_service==1 && index($0, cfg) > 0 {
       print svc
       exit
     }
@@ -1133,25 +1133,34 @@ remove_service_block() {
   tmp="$(mktemp)"
 
   awk -v svc="$svc" '
-    BEGIN{inblock=0; indent_level=0}
-    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ {
-      match($0, /^[[:space:]]*/)
-      current_indent=RLENGTH
-      match($0, /^[[:space:]]*([A-Za-z0-9_-]+):/, arr)
-      service_name=arr[1]
+    BEGIN{inblock=0; base_indent=-1}
+    {
+      if (match($0, /^[[:space:]]*/)) {
+        current_indent=RLENGTH
+      } else {
+        current_indent=0
+      }
       
-      if (service_name == svc && current_indent <= 2) {
+      line=$0
+      gsub(/^[[:space:]]+/, "", line)
+      gsub(/:[[:space:]]*$/, "", line)
+      
+      if (line == svc && (base_indent == -1 || current_indent <= 2)) {
         inblock=1
-        indent_level=current_indent
+        base_indent=current_indent
         next
       }
       
-      if (inblock==1 && current_indent <= indent_level) {
-        inblock=0
+      if (inblock==1) {
+        if (current_indent <= base_indent && /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/) {
+          inblock=0
+        } else {
+          next
+        }
       }
+      
+      print
     }
-    inblock==1 {next}
-    {print}
   ' "$COMPOSE_FILE" > "$tmp"
 
   mv "$tmp" "$COMPOSE_FILE"
@@ -1207,7 +1216,7 @@ select_cfg_interactive() {
       echo "  $i) $f" >&2
       i=$(( i + 1 ))
     done
-    die "请重新运行选项 5 并输入更精确的关键词/文件名。"
+    die "请重新运行选项 4 并输入更精确的关键词/文件名。"
   fi
 
   die "未找到匹配的配置文件：$sel"
@@ -1295,15 +1304,8 @@ main() {
   echo "=============================="
 
   local ACTION
-  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5）" "1"
-
-  case "$ACTION" in
-    1) do_install ;;
-    2) do_uninstall ;;
-    3) do_add_client ;;
-    4) do_show_info ;;
-    5) do_delete_client ;;
-    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
+  prompt ACTION "请输入数字选择（1 / 2 / 3 /do_delete_client ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4。" ;;
   esac
 }
 
