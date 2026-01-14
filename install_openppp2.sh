@@ -95,8 +95,31 @@ detect_compose() {
 
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
+  
+  local proxy_cfg="/etc/apt/apt.conf.d/99temp-proxy"
+  
+  # 检测并配置 apt 代理
+  if [[ -n "${http_proxy:-}" || -n "${HTTP_PROXY:-}" ]]; then
+    local proxy="${http_proxy:-${HTTP_PROXY:-}}"
+    info "检测到代理环境变量，为 APT 配置代理：${proxy}"
+    cat > "$proxy_cfg" <<APTPROXYEOF
+Acquire::http::Proxy "${proxy}";
+Acquire::https::Proxy "${proxy}";
+APTPROXYEOF
+  fi
+  
+  info "正在更新软件包列表（最多等待 120 秒）..."
+  if timeout 120 apt-get update -y 2>&1 | grep -v "^Get:" | grep -v "^Hit:" | grep -v "^Ign:" || true; then
+    info "软件包列表更新完成"
+  else
+    warn "apt-get update 超时或失败，将继续尝试安装..."
+  fi
+  
+  info "正在安装必要工具：$*"
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
+  
+  # 清理临时代理配置
+  rm -f "$proxy_cfg" >/dev/null 2>&1 || true
 }
 
 curl_retry() {
@@ -121,9 +144,33 @@ APTEOF
 
 ensure_basic_tools() {
   force_apt_ipv4
-  if need_cmd apt-get; then
-    apt_install ca-certificates curl jq iproute2 gnupg >/dev/null 2>&1 || true
+  
+  local missing_tools=()
+  
+  if ! need_cmd curl; then
+    missing_tools+=("curl")
   fi
+  if ! need_cmd jq; then
+    missing_tools+=("jq")
+  fi
+  if ! need_cmd ip; then
+    missing_tools+=("iproute2")
+  fi
+  if ! need_cmd ss; then
+    missing_tools+=("iproute2")
+  fi
+  
+  if [[ "${#missing_tools[@]}" -gt 0 ]]; then
+    if need_cmd apt-get; then
+      info "检测到缺少工具，正在安装：${missing_tools[*]}"
+      apt_install ca-certificates curl jq iproute2 gnupg
+    else
+      die "缺少必要工具且无法自动安装（非 apt 环境）：${missing_tools[*]}"
+    fi
+  else
+    info "所有必要工具已安装。"
+  fi
+  
   need_cmd curl || die "curl 未安装成功，请手动安装 curl 后重试。"
   need_cmd jq   || die "jq 未安装成功，请手动安装 jq 后重试。"
   need_cmd ip   || die "ip 命令未找到，请安装 iproute2 后重试。"
@@ -162,7 +209,7 @@ print_docker_diagnose() {
 
 install_docker_from_debian() {
   info "尝试通过 Debian/Ubuntu 仓库安装 docker.io ..."
-  apt_install docker.io >/dev/null 2>&1 || return 1
+  apt_install docker.io
   start_docker_daemon_soft
   return 0
 }
@@ -173,7 +220,8 @@ install_docker_compose_plugin_if_missing() {
   fi
 
   if need_cmd apt-get; then
-    apt_install docker-compose-plugin >/dev/null 2>&1 || true
+    info "正在安装 docker-compose-plugin..."
+    apt_install docker-compose-plugin || true
   fi
 
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
@@ -181,7 +229,8 @@ install_docker_compose_plugin_if_missing() {
   fi
 
   if ! need_cmd docker-compose && need_cmd apt-get; then
-    apt_install docker-compose >/dev/null 2>&1 || true
+    info "正在安装 docker-compose（兼容模式）..."
+    apt_install docker-compose || true
   fi
 
   return 0
