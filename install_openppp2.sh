@@ -949,7 +949,9 @@ do_add_client() {
 
   local SVC_NAME
   prompt SVC_NAME "请输入新客户端实例名称（容器/服务名）" "$default_svc"
-  if grep -qE "^[[:space:]]${SVC_NAME}:" "$COMPOSE_FILE" 2>/dev/null; then
+
+  # ✅ 仅此一行已修复：正确匹配两格缩进的 service key，避免重复定义
+  if grep -qE "^[[:space:]]{2}${SVC_NAME}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null; then
     die "服务名 ${SVC_NAME} 已存在，请换一个名称。"
   fi
 
