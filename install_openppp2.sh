@@ -203,8 +203,7 @@ start_docker_daemon_soft() {
 }
 
 docker_daemon_ok() {
-  need_cmd docker || return 1
-  docker info >/dev/null 2>&1
+  need_cmd docker || return 1 info >/dev/null 2>&1
 }
 
 print_docker_diagnose() {
@@ -318,7 +317,7 @@ detect_net() {
   if [[ -z "${dev:-}" || -z "${lan:-}" ]]; then
     out="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
     lan="$(awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$out")"
-    dev="${dev:-$(F;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
+    dev="${dev:-$(awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
     gw="${gw:-$(awk '/via/ {for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$out")}"
   fi
 
@@ -820,7 +819,7 @@ do_install() {
       remove_docker_proxy
     fi
     
-    health_check_one "$( 2>/dev/null || echo openppp2)"
+    health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
   else
     health_check_one "openppp2"
   fi
@@ -874,9 +873,6 @@ do_uninstall() {
   echo "卸载完成。"
 }
 
-check_service_existssvc}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null
-}
-
 do_add_client() {
   ensure_docker_stack
 
@@ -894,8 +890,8 @@ do_add_client() {
 
   cd "$APP_DIR"
 
-  if [[ ! -f "$SEC
-    infoCOMP_FILE" ]]; then "未找到 seccomp 配置文件，正在生成..."
+  if [[ ! -f "$SECCOMP_FILE" ]]; then
+    info "未找到 seccomp 配置文件，正在生成..."
     generate_seccomp_profile "$SECCOMP_FILE"
   fi
 
@@ -953,27 +949,8 @@ do_add_client() {
 
   local SVC_NAME
   prompt SVC_NAME "请输入新客户端实例名称（容器/服务名）" "$default_svc"
-  
-  if check_service_exists "$SVC_NAME"; then
-    warn "服务名 ${SVC_NAME} 在 docker-compose.yml 中已存在"
-    
-    local expected_cfg="appsettings-${SVC_NAME}.json"
-    if [[ ! -f "$expected_cfg" ]]; then
-      warn "但配置文件 ${expected_cfg} 不存在，可能是之前删除不完整"
-      echo
-      local CLEAN_OLD
-      prompt CLEAN_OLD "是否清理旧的服务定义并重新创建？（yes/no）" "yes"
-      
-      if [[ "$CLEAN_OLD" == "yes" ]]; then
-        info "正在清理旧的服务定义：${SVC_NAME}"
-        remove_service_block "$SVC_NAME"
-        rm -f "ip-${SVC_NAME}.txt" "dns-rules-${SVC_NAME}.txt" >/dev/null 2>&1 || true
-      else
-        die "请手动删除 docker-compose.yml 中的 ${SVC_NAME} 服务块，或选择其他服务名。"
-      fi
-    else
-      die "服务名 ${SVC_NAME} 已存在且配置文件完整，请换一个名称。"
-    fi
+  if grep -qE "^[[:space:]]${SVC_NAME}:" "$COMPOSE_FILE" 2>/dev/null; then
+    die "服务名 ${SVC_NAME} 已存在，请换一个名称。"
   fi
 
   local cfg_default="appsettings-${SVC_NAME}.json"
@@ -1109,19 +1086,9 @@ print_client_cfgs() {
 find_service_by_cfg() {
   local cfg="$1"
   awk -v cfg="$cfg" '
-    BEGIN{svc=""; in_service=0}
-    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ {
-      svc=$1
-      gsub(/^[[:space:]]+|:[[:space:]]*$/, "", svc)
-      in_service=1
-    }
-    in_service==1 && index($0, cfg) > 0 {
-      print svc
-      exit
-    }
-    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ && in_service==1 {
-      in_service=0
-    }
+    BEGIN{svc=""}
+    /^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$/ {svc=$1; sub(":", "", svc)}
+    index($0, "./" cfg) > 0 { if (svc!="") { print svc; exit } }
   ' "$COMPOSE_FILE"
 }
 
@@ -1131,34 +1098,11 @@ remove_service_block() {
   tmp="$(mktemp)"
 
   awk -v svc="$svc" '
-    BEGIN{inblock=0; base_indent=-1}
-    {
-      if (match($0, /^[[:space:]]*/)) {
-        current_indent=RLENGTH
-      } else {
-        current_indent=0
-      }
-      
-      line=$0
-      gsub(/^[[:space:]]+/, "", line)
-      gsub(/:[[:space:]]*$/, "", line (base)
-      
-      if (line == svc &&_indent == -1 || current_indent <= 2)) {
-        inblock=1
-        base_indent=current_indent
-        next
-      }
-      
-      if (inblock==1) {
-        if (current_indent <= base_indent && /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/) {
-          inblock=0
-        } else {
-          next
-        }
-      }
-      
-      print
-    }
+    BEGIN{inblock=0}
+    $0 ~ "^[[:space:]]{2}" svc ":[[:space:]]*$" {inblock=1; next}
+    inblock==1 && $0 ~ "^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$" {inblock=0}
+    inblock==1 {next}
+    {print}
   ' "$COMPOSE_FILE" > "$tmp"
 
   mv "$tmp" "$COMPOSE_FILE"
@@ -1214,7 +1158,7 @@ select_cfg_interactive() {
       echo "  $i) $f" >&2
       i=$(( i + 1 ))
     done
-    die "请重新运行选项 4 并输入更精确的关键词/文件名。"
+    die "请重新运行选项 5 并输入更精确的关键词/文件名。"
   fi
 
   die "未找到匹配的配置文件：$sel"
@@ -1238,6 +1182,8 @@ do_delete_client() {
 
   if ! list_client_cfgs; then
     echo "未找到可删除的客户端配置文件。"
+    return 0
+  fi
 
   local cfg
   cfg="$(select_cfg_interactive)"
@@ -1278,7 +1224,7 @@ do_delete_client() {
   compose up -d --remove-orphans >/dev/null 2>&1 || true
 
   echo
-  echo "删除完成。建议查看配置确认结果。"
+  echo "删除完成。建议用 4) 查看客户端配置和代理信息 确认结果。"
 }
 
 check_env_supported() {
@@ -1296,18 +1242,20 @@ main() {
   echo "  1) 安装 openppp2"
   echo "  2) 卸载 openppp2"
   echo "  3) 新增 openppp2 客户端实例"
-  echo "  4) 删除客户端实例/配置（避免重启反复拉起）"
+  echo "  4) 查看客户端配置和代理信息"
+  echo "  5) 删除客户端实例/配置（避免重启反复拉起）"
   echo "=============================="
 
   local ACTION
-  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4）" "1"
+  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5）" "1"
 
   case "$ACTION" in
     1) do_install ;;
     2) do_uninstall ;;
     3) do_add_client ;;
-    4) do_delete_client ;;
-    *) die "输入错误，只能是 1 / 2 / 3 / 4。" ;;
+    4) do_show_info ;;
+    5) do_delete_client ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
   esac
 }
 
