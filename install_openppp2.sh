@@ -319,438 +319,50 @@ generate_seccomp_profile() {
   "syscalls": [
     {
       "names": [
-        "accept",
-        "accept4",
-        "access",
-        "adjtimex",
-        "alarm",
-        "bind",
-        "brk",
-        "capget",
-        "capset",
-        "chdir",
-        "chmod",
-        "chown",
-        "chown32",
-        "clock_adjtime",
-        "clock_adjtime64",
-        "clock_getres",
-        "clock_getres_time64",
-        "clock_gettime",
-        "clock_gettime64",
-        "clock_nanosleep",
-        "clock_nanosleep_time64",
-        "close",
-        "close_range",
-        "connect",
-        "copy_file_range",
-        "creat",
-        "dup",
-        "dup2",
-        "dup3",
-        "epoll_create",
-        "epoll_create1",
-        "epoll_ctl",
-        "epoll_ctl_old",
-        "epoll_pwait",
-        "epoll_pwait2",
-        "epoll_wait",
-        "epoll_wait_old",
-        "eventfd",
-        "eventfd2",
-        "execve",
-        "execveat",
-        "exit",
-        "exit_group",
-        "faccessat",
-        "faccessat2",
-        "fadvise64",
-        "fadvise64_64",
-        "fallocate",
-        "fanotify_mark",
-        "fchdir",
-        "fchmod",
-        "fchmodat",
-        "fchown",
-        "fchown32",
-        "fchownat",
-        "fcntl",
-        "fcntl64",
-        "fdatasync",
-        "fgetxattr",
-        "flistxattr",
-        "flock",
-        "fork",
-        "fremovexattr",
-        "fsetxattr",
-        "fstat",
-        "fstat64",
-        "fstatat64",
-        "fstatfs",
-        "fstatfs64",
-        "fsync",
-        "ftruncate",
-        "ftruncate64",
-        "futex",
-        "futex_time64",
-        "futimesat",
-        "getcpu",
-        "getcwd",
-        "getdents",
-        "getdents64",
-        "getegid",
-        "getegid32",
-        "geteuid",
-        "geteuid32",
-        "getgid",
-        "getgid32",
-        "getgroups",
-        "getgroups32",
-        "getitimer",
-        "getpeername",
-        "getpgid",
-        "getpgrp",
-        "getpid",
-        "getppid",
-        "getpriority",
-        "getrandom",
-        "getresgid",
-        "getresgid32",
-        "getresuid",
-        "getresuid32",
-        "getrlimit",
-        "get_robust_list",
-        "getrusage",
-        "getsid",
-        "getsockname",
-        "getsockopt",
-        "get_thread_area",
-        "gettid",
-        "gettimeofday",
-        "getuid",
-        "getuid32",
-        "getxattr",
-        "inotify_add_watch",
-        "inotify_init",
-        "inotify_init1",
-        "inotify_rm_watch",
-        "io_cancel",
-        "ioctl",
-        "io_destroy",
-        "io_getevents",
-        "io_pgetevents",
-        "io_pgetevents_time64",
-        "ioprio_get",
-        "ioprio_set",
-        "io_setup",
-        "io_submit",
-        "io_uring_enter",
-        "io_uring_register",
-        "io_uring_setup",
-        "ipc",
-        "kill",
-        "lchown",
-        "lchown32",
-        "lgetxattr",
-        "link",
-        "linkat",
-        "listen",
-        "listxattr",
-        "llistxattr",
-        "lremovexattr",
-        "lseek",
-        "lsetxattr",
-        "lstat",
-        "lstat64",
-        "madvise",
-        "membarrier",
-        "memfd_create",
-        "mincore",
-        "mkdir",
-        "mkdirat",
-        "mknod",
-        "mknodat",
-        "mlock",
-        "mlock2",
-        "mlockall",
-        "mmap",
-        "mmap2",
-        "mprotect",
-        "mq_getsetattr",
-        "mq_notify",
-        "mq_open",
-        "mq_timedreceive",
-        "mq_timedreceive_time64",
-        "mq_timedsend",
-        "mq_timedsend_time64",
-        "mq_unlink",
-        "mremap",
-        "msgctl",
-        "msgget",
-        "msgrcv",
-        "msgsnd",
-        "msync",
-        "munlock",
-        "munlockall",
-        "munmap",
-        "nanosleep",
-        "newfstatat",
-        "open",
-        "openat",
-        "openat2",
-        "pause",
-        "pipe",
-        "pipe2",
-        "poll",
-        "ppoll",
-        "ppoll_time64",
-        "prctl",
-        "pread64",
-        "preadv",
-        "preadv2",
-        "prlimit64",
-        "pselect6",
-        "pselect6_time64",
-        "pwrite64",
-        "pwritev",
-        "pwritev2",
-        "read",
-        "readahead",
-        "readlink",
-        "readlinkat",
-        "readv",
-        "recv",
-        "recvfrom",
-        "recvmmsg",
-        "recvmmsg_time64",
-        "recvmsg",
-        "remap_file_pages",
-        "removexattr",
-        "rename",
-        "renameat",
-        "renameat2",
-        "restart_syscall",
-        "rmdir",
-        "rt_sigaction",
-        "rt_sigpending",
-        "rt_sigprocmask",
-        "rt_sigqueueinfo",
-        "rt_sigreturn",
-        "rt_sigsuspend",
-        "rt_sigtimedwait",
-        "rt_sigtimedwait_time64",
-        "rt_tgsigqueueinfo",
-        "sched_getaffinity",
-        "sched_getattr",
-        "sched_getparam",
-        "sched_get_priority_max",
-        "sched_get_priority_min",
-        "sched_getscheduler",
-        "sched_rr_get_interval",
-        "sched_rr_get_interval_time64",
-        "sched_setaffinity",
-        "sched_setattr",
-        "sched_setparam",
-        "sched_setscheduler",
-        "sched_yield",
-        "seccomp",
-        "select",
-        "semctl",
-        "semget",
-        "semop",
-        "semtimedop",
-        "semtimedop_time64",
-        "send",
-        "sendfile",
-        "sendfile64",
-        "sendmmsg",
-        "sendmsg",
-        "sendto",
-        "setfsgid",
-        "setfsgid32",
-        "setfsuid",
-        "setfsuid32",
-        "setgid",
-        "setgid32",
-        "setgroups",
-        "setgroups32",
-        "setitimer",
-        "setpgid",
-        "setpriority",
-        "setregid",
-        "setregid32",
-        "setresgid",
-        "setresgid32",
-        "setresuid",
-        "setresuid32",
-        "setreuid",
-        "setreuid32",
-        "setrlimit",
-        "set_robust_list",
-        "setsid",
-        "setsockopt",
-        "set_thread_area",
-        "set_tid_address",
-        "setuid",
-        "setuid32",
-        "setxattr",
-        "shmat",
-        "shmctl",
-        "shmdt",
-        "shmget",
-        "shutdown",
-        "sigaltstack",
-        "signalfd",
-        "signalfd4",
-        "sigprocmask",
-        "sigreturn",
-        "socket",
-        "socketcall",
-        "socketpair",
-        "splice",
-        "stat",
-        "stat64",
-        "statfs",
-        "statfs64",
-        "statx",
-        "symlink",
-        "symlinkat",
-        "sync",
-        "sync_file_range",
-        "syncfs",
-        "sysinfo",
-        "tee",
-        "tgkill",
-        "time",
-        "timer_create",
-        "timer_delete",
-        "timer_getoverrun",
-        "timer_gettime",
-        "timer_gettime64",
-        "timer_settime",
-        "timer_settime64",
-        "timerfd_create",
-        "timerfd_gettime",
-        "timerfd_gettime64",
-        "timerfd_settime",
-        "timerfd_settime64",
-        "times",
-        "tkill",
-        "truncate",
-        "truncate64",
-        "ugetrlimit",
-        "umask",
-        "uname",
-        "unlink",
-        "unlinkat",
-        "utime",
-        "utimensat",
-        "utimensat_time64",
-        "utimes",
-        "vfork",
-        "vmsplice",
-        "wait4",
-        "waitid",
-        "waitpid",
-        "write",
-        "writev"
+        "accept","accept4","access","adjtimex","alarm","bind","brk","capget","capset","chdir","chmod","chown","chown32","clock_adjtime","clock_adjtime64","clock_getres","clock_getres_time64","clock_gettime","clock_gettime64","clock_nanosleep","clock_nanosleep_time64","close","close_range","connect","copy_file_range","creat","dup","dup2","dup3","epoll_create","epoll_create1","epoll_ctl","epoll_ctl_old","epoll_pwait","epoll_pwait2","epoll_wait","epoll_wait_old","eventfd","eventfd2","execve","execveat","exit","exit_group","faccessat","faccessat2","fadvise64","fadvise64_64","fallocate","fanotify_mark","fchdir","fchmod","fchmodat","fchown","fchown32","fchownat","fcntl","fcntl64","fdatasync","fgetxattr","flistxattr","flock","fork","fremovexattr","fsetxattr","fstat","fstat64","fstatat64","fstatfs","fstatfs64","fsync","ftruncate","ftruncate64","futex","futex_time64","futimesat","getcpu","getcwd","getdents","getdents64","getegid","getegid32","geteuid","geteuid32","getgid","getgid32","getgroups","getgroups32","getitimer","getpeername","getpgid","getpgrp","getpid","getppid","getpriority","getrandom","getresgid","getresgid32","getresuid","getresuid32","getrlimit","get_robust_list","getrusage","getsid","getsockname","getsockopt","get_thread_area","gettid","gettimeofday","getuid","getuid32","getxattr","inotify_add_watch","inotify_init","inotify_init1","inotify_rm_watch","io_cancel","ioctl","io_destroy","io_getevents","io_pgetevents","io_pgetevents_time64","ioprio_get","ioprio_set","io_setup","io_submit","io_uring_enter","io_uring_register","io_uring_setup","ipc","kill","lchown","lchown32","lgetxattr","link","linkat","listen","listxattr","llistxattr","lremovexattr","lseek","lsetxattr","lstat","lstat64","madvise","membarrier","memfd_create","mincore","mkdir","mkdirat","mknod","mknodat","mlock","mlock2","mlockall","mmap","mmap2","mprotect","mq_getsetattr","mq_notify","mq_open","mq_timedreceive","mq_timedreceive_time64","mq_timedsend","mq_timedsend_time64","mq_unlink","mremap","msgctl","msgget","msgrcv","msgsnd","msync","munlock","munlockall","munmap","nanosleep","newfstatat","open","openat","openat2","pause","pipe","pipe2","poll","ppoll","ppoll_time64","prctl","pread64","preadv","preadv2","prlimit64","pselect6","pselect6_time64","pwrite64","pwritev","pwritev2","read","readahead","readlink","readlinkat","readv","recv","recvfrom","recvmmsg","recvmmsg_time64","recvmsg","remap_file_pages","removexattr","rename","renameat","renameat2","restart_syscall","rmdir","rt_sigaction","rt_sigpending","rt_sigprocmask","rt_sigqueueinfo","rt_sigreturn","rt_sigsuspend","rt_sigtimedwait","rt_sigtimedwait_time64","rt_tgsigqueueinfo","sched_getaffinity","sched_getattr","sched_getparam","sched_get_priority_max","sched_get_priority_min","sched_getscheduler","sched_rr_get_interval","sched_rr_get_interval_time64","sched_setaffinity","sched_setattr","sched_setparam","sched_setscheduler","sched_yield","seccomp","select","semctl","semget","semop","semtimedop","semtimedop_time64","send","sendfile","sendfile64","sendmmsg","sendmsg","sendto","setfsgid","setfsgid32","setfsuid","setfsuid32","setgid","setgid32","setgroups","setgroups32","setitimer","setpgid","setpriority","setregid","setregid32","setresgid","setresgid32","setresuid","setresuid32","setreuid","setreuid32","setrlimit","set_robust_list","setsid","setsockopt","set_thread_area","set_tid_address","setuid","setuid32","setxattr","shmat","shmctl","shmdt","shmget","shutdown","sigaltstack","signalfd","signalfd4","sigprocmask","sigreturn","socket","socketcall","socketpair","splice","stat","stat64","statfs","statfs64","statx","symlink","symlinkat","sync","sync_file_range","syncfs","sysinfo","tee","tgkill","time","timer_create","timer_delete","timer_getoverrun","timer_gettime","timer_gettime64","timer_settime","timer_settime64","timerfd_create","timerfd_gettime","timerfd_gettime64","timerfd_settime","timerfd_settime64","times","tkill","truncate","truncate64","ugetrlimit","umask","uname","unlink","unlinkat","utime","utimensat","utimensat_time64","utimes","vfork","vmsplice","wait4","waitid","waitpid","write","writev"
       ],
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "names": [
-        "personality"
-      ],
+      "names": ["personality"],
       "action": "SCMP_ACT_ALLOW",
-      "args": [
-        {
-          "index": 0,
-          "value": 0,
-          "op": "SCMP_CMP_EQ"
-        }
-      ]
+      "args": [{"index": 0,"value": 0,"op": "SCMP_CMP_EQ"}]
     },
     {
-      "names": [
-        "personality"
-      ],
+      "names": ["personality"],
       "action": "SCMP_ACT_ALLOW",
-      "args": [
-        {
-          "index": 0,
-          "value": 8,
-          "op": "SCMP_CMP_EQ"
-        }
-      ]
+      "args": [{"index": 0,"value": 8,"op": "SCMP_CMP_EQ"}]
     },
     {
-      "names": [
-        "personality"
-      ],
+      "names": ["personality"],
       "action": "SCMP_ACT_ALLOW",
-      "args": [
-        {
-          "index": 0,
-          "value": 131072,
-          "op": "SCMP_CMP_EQ"
-        }
-      ]
+      "args": [{"index": 0,"value": 131072,"op": "SCMP_CMP_EQ"}]
     },
     {
-      "names": [
-        "personality"
-      ],
+      "names": ["personality"],
       "action": "SCMP_ACT_ALLOW",
-      "args": [
-        {
-          "index": 0,
-          "value": 131080,
-          "op": "SCMP_CMP_EQ"
-        }
-      ]
+      "args": [{"index": 0,"value": 131080,"op": "SCMP_CMP_EQ"}]
     },
     {
-      "names": [
-        "personality"
-      ],
+      "names": ["personality"],
       "action": "SCMP_ACT_ALLOW",
-      "args": [
-        {
-          "index": 0,
-          "value": 4294967295,
-          "op": "SCMP_CMP_EQ"
-        }
-      ]
+      "args": [{"index": 0,"value": 4294967295,"op": "SCMP_CMP_EQ"}]
     },
     {
-      "names": [
-        "arch_prctl"
-      ],
+      "names": ["arch_prctl"],
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "names": [
-        "modify_ldt"
-      ],
+      "names": ["modify_ldt"],
       "action": "SCMP_ACT_ALLOW"
     },
     {
-      "names": [
-        "clone"
-      ],
+      "names": ["clone"],
       "action": "SCMP_ACT_ALLOW",
-      "args": [
-        {
-          "index": 0,
-          "value": 2114060288,
-          "op": "SCMP_CMP_MASKED_EQ"
-        }
-      ]
+      "args": [{"index": 0,"value": 2114060288,"op": "SCMP_CMP_MASKED_EQ"}]
     },
     {
-      "names": [
-        "clone3"
-      ],
+      "names": ["clone3"],
       "action": "SCMP_ACT_ERRNO",
       "errnoRet": 38
     }
@@ -978,7 +590,7 @@ TIMEREOF
 
 health_check_one() {
   local svc="$1"
-  if ! docker ps --format 'x "$svc"; then
+  if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
     warn "容器未运行：${svc}"
     echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}" >&2
     exit 1
@@ -1026,7 +638,9 @@ do_install() {
       prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" ""
     fi
 
-    jq --arg ip "$SERVER_PUBLIC_IP" '.ip.public=$ip | .ip.interface=$ip' appsettings.base.json > "$APP_CFG_NAME"
+    jq --arg ip "$SERVER_PUBLIC_IP" \
+       '.ip.public=$ip | .ip.interface=$ip' \
+       appsettings.base.json > "$APP_CFG_NAME"
 
     write_compose_server "$IMAGE" "$APP_CFG_NAME"
     echo "server" > "${APP_DIR}/.role"
@@ -1082,12 +696,12 @@ do_install() {
     done
 
     jq --arg srv "$SERVER_URI" \
-      --arg guid "$guid" \
-      --arg lan "$lan" \
-      --argjson hport "$HTTP_PORT" \
-      --argjson sport "$SOCKS_PORT" \
-      '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
-      appsettings.base.json > "$APP_CFG_NAME"
+       --arg guid "$guid" \
+       --arg lan "$lan" \
+       --argjson hport "$HTTP_PORT" \
+       --argjson sport "$SOCKS_PORT" \
+       '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
+       appsettings.base.json > "$APP_CFG_NAME"
 
     [[ -f ip.txt ]] || : > ip.txt
     [[ -f dns-rules.txt ]] || : > dns-rules.txt
@@ -1154,7 +768,7 @@ do_install() {
   echo "配置目录：${APP_DIR}"
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
   echo
-  info "安全配置:使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
+  info "安全配置：使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
 }
 
 do_uninstall() {
@@ -1231,7 +845,8 @@ do_add_client() {
   fi
 
   local SERVER_IP SERVER_PORT guid lan nic gw netinfo
-  prompt SERVER_IP "请输入新增客户端要连接的服务端 IP（入新增客户端要连接的服务端端口（例如 20000）" "20000"
+  prompt SERVER_IP "请输入新增客户端要连接的服务端 IP（例如 1.2.3.4）" ""
+  prompt_port SERVER_PORT "请输入新增客户端要连接的服务端端口（例如 20000）" "20000"
 
   guid="$(gen_guid)"
   netinfo="$(detect_net)"
@@ -1295,12 +910,12 @@ do_add_client() {
   done
 
   jq --arg srv "$SERVER_URI" \
-    --arg guid "$guid" \
-    --arg lan "$lan" \
-    --argjson hport "$HTTP_PORT" \
-    --argjson sport "$SOCKS_PORT" \
-    '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
-    appsettings.base.json > "${CFG_NAME}"
+     --arg guid "$guid" \
+     --arg lan "$lan" \
+     --argjson hport "$HTTP_PORT" \
+     --argjson sport "$SOCKS_PORT" \
+     '.client.server=$srv | .client.guid=$guid | .client["http-proxy"].bind=$lan | .client["socks-proxy"].bind=$lan | .client["http-proxy"].port=$hport | .client["socks-proxy"].port=$sport' \
+     appsettings.base.json > "${CFG_NAME}"
 
   [[ -f "$ipfile" ]] || : > "$ipfile"
   [[ -f "$dnsfile" ]] || : > "$dnsfile"
@@ -1385,7 +1000,9 @@ CLIENT_CFG_LIST=()
 list_client_cfgs() {
   cd "$APP_DIR"
   CLIENT_CFG_LIST=()
-  local f || continue
+  local f
+  for f in appsettings*.json; do
+    [[ -f "$f" ]] || continue
     [[ "$f" == "appsettings.base.json" ]] && continue
     if jq -e '.client.server? // empty' "$f" >/dev/null 2>&1; then
       CLIENT_CFG_LIST+=("$f")
