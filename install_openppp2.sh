@@ -203,7 +203,8 @@ start_docker_daemon_soft() {
 }
 
 docker_daemon_ok() {
-  need_cmd docker || return 1 info >/dev/null 2>&1
+  need_cmd docker || return 1
+  docker info >/dev/null 2>&1
 }
 
 print_docker_diagnose() {
@@ -873,6 +874,11 @@ do_uninstall() {
   echo "卸载完成。"
 }
 
+check_service_exists() {
+  local svc="$1"
+  grep -qE "^[[:space:]]*${svc}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null
+}
+
 do_add_client() {
   ensure_docker_stack
 
@@ -949,8 +955,27 @@ do_add_client() {
 
   local SVC_NAME
   prompt SVC_NAME "请输入新客户端实例名称（容器/服务名）" "$default_svc"
-  if grep -qE "^[[:space:]]${SVC_NAME}:" "$COMPOSE_FILE" 2>/dev/null; then
-    die "服务名 ${SVC_NAME} 已存在，请换一个名称。"
+  
+  if check_service_exists "$SVC_NAME"; then
+    warn "服务名 ${SVC_NAME} 在 docker-compose.yml 中已存在"
+    
+    local expected_cfg="appsettings-${SVC_NAME}.json"
+    if [[ ! -f "$expected_cfg" ]]; then
+      warn "但配置文件 ${expected_cfg} 不存在，可能是之前删除不完整"
+      echo
+      local CLEAN_OLD
+      prompt CLEAN_OLD "是否清理旧的服务定义并重新创建？（yes/no）" "yes"
+      
+      if [[ "$CLEAN_OLD" == "yes" ]]; then
+        info "正在清理旧的服务定义：${SVC_NAME}"
+        remove_service_block "$SVC_NAME"
+        rm -f "ip-${SVC_NAME}.txt" "dns-rules-${SVC_NAME}.txt" >/dev/null 2>&1 || true
+      else
+        die "请手动删除 docker-compose.yml 中的 ${SVC_NAME} 服务块，或选择其他服务名。"
+      fi
+    else
+      die "服务名 ${SVC_NAME} 已存在且配置文件完整，请换一个名称。"
+    fi
   fi
 
   local cfg_default="appsettings-${SVC_NAME}.json"
@@ -1086,9 +1111,19 @@ print_client_cfgs() {
 find_service_by_cfg() {
   local cfg="$1"
   awk -v cfg="$cfg" '
-    BEGIN{svc=""}
-    /^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$/ {svc=$1; sub(":", "", svc)}
-    index($0, "./" cfg) > 0 { if (svc!="") { print svc; exit } }
+    BEGIN{svc=""; in_service=0}
+    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*([A-Za-z0-9_-]+):/, arr)
+      svc=arr[1]
+      in_service=1
+    }
+    in_service==1 && $0 ~ cfg {
+      print svc
+      exit
+    }
+    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ && in_service==1 {
+      in_service=0
+    }
   ' "$COMPOSE_FILE"
 }
 
@@ -1098,9 +1133,23 @@ remove_service_block() {
   tmp="$(mktemp)"
 
   awk -v svc="$svc" '
-    BEGIN{inblock=0}
-    $0 ~ "^[[:space:]]{2}" svc ":[[:space:]]*$" {inblock=1; next}
-    inblock==1 && $0 ~ "^[[:space:]]{2}[A-Za-z0-9_.-]+:[[:space:]]*$" {inblock=0}
+    BEGIN{inblock=0; indent_level=0}
+    /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*/)
+      current_indent=RLENGTH
+      match($0, /^[[:space:]]*([A-Za-z0-9_-]+):/, arr)
+      service_name=arr[1]
+      
+      if (service_name == svc && current_indent <= 2) {
+        inblock=1
+        indent_level=current_indent
+        next
+      }
+      
+      if (inblock==1 && current_indent <= indent_level) {
+        inblock=0
+      }
+    }
     inblock==1 {next}
     {print}
   ' "$COMPOSE_FILE" > "$tmp"
@@ -1242,8 +1291,7 @@ main() {
   echo "  1) 安装 openppp2"
   echo "  2) 卸载 openppp2"
   echo "  3) 新增 openppp2 客户端实例"
-  echo "  4) 查看客户端配置和代理信息"
-  echo "  5) 删除客户端实例/配置（避免重启反复拉起）"
+  echo "  4) 删除客户端实例/配置（避免重启反复拉起）"
   echo "=============================="
 
   local ACTION
