@@ -6,16 +6,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /opt/openppp2
 
-# 默认固定到 1.0.0.26016 的 amd64 io-uring-simd（你要求的默认值）
+# 默认值仅用于本地手工 build；CI 会用 build-arg 覆盖成“最新 release 的 simd zip”
 ARG OPENPPP2_ZIP_URL="https://github.com/liulilittle/openppp2/releases/download/1.0.0.26016/openppp2-linux-amd64-simd.zip"
 
-RUN wget -O openppp2.zip "${OPENPPP2_ZIP_URL}" \
- && unzip openppp2.zip \
- && chmod +x ./ppp \
- && rm -f openppp2.zip \
- && test -f ./ppp
+RUN set -eux; \
+    wget -O openppp2.zip "${OPENPPP2_ZIP_URL}"; \
+    unzip -o openppp2.zip; \
+    chmod +x ./ppp; \
+    rm -f openppp2.zip; \
+    test -f ./ppp
 
-# 镜像里只放占位配置；生产环境用 volume 覆盖
 RUN echo '{}' > /opt/openppp2/appsettings.json
 
 EXPOSE 20000/tcp
