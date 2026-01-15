@@ -58,7 +58,7 @@ jobs:
           push: true
           platforms: linux/amd64
           build-args: |
-            OPENPPP2_ZIP_URL=https://github.com/liulilittle/openppp2/releases/download/${{ steps.upstream.outputs.tag }}/openppp2-linux-amd64-io-uring-simd.zip
+            OPENPPP2_ZIP_URL=https://github.com/liulilittle/openppp2/releases/download/${{ steps.upstream.outputs.tag }}/openppp2-linux-amd64-simd.zip
           tags: |
             ghcr.io/${{ github.repository_owner }}/openppp2:latest
             ghcr.io/${{ github.repository_owner }}/openppp2:${{ steps.upstream.outputs.tag }}
