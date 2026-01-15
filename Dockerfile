@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt/openppp2
 
 # 默认固定到 1.0.0.26016 的 amd64 io-uring-simd（你要求的默认值）
-ARG OPENPPP2_ZIP_URL="https://github.com/liulilittle/openppp2/releases/download/1.0.0.26016/openppp2-linux-amd64-io-uring-simd.zip"
+ARG OPENPPP2_ZIP_URL="https://github.com/liulilittle/openppp2/releases/download/1.0.0.26016/openppp2-linux-amd64-simd.zip"
 
 RUN wget -O openppp2.zip "${OPENPPP2_ZIP_URL}" \
  && unzip openppp2.zip \
