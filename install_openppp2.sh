@@ -1273,3 +1273,121 @@ main() {
 }
 
 main "$@"
+
+############################################
+# Docker 日志自动轮转（追加覆盖版）
+# 说明：
+# - 不修改你原有任何主体代码
+# - 仅通过“后定义函数覆盖前定义”的 Bash 机制生效
+############################################
+
+compose_logging_block() {
+  cat <<'LOGEOF'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+LOGEOF
+}
+
+write_compose_server() {
+  local image="$1" cfg="$2"
+  compose_header > "$COMPOSE_FILE"
+  cat >> "$COMPOSE_FILE" <<SERVEREOF
+services:
+  openppp2:
+    image: ${image}
+    container_name: openppp2
+    restart: unless-stopped
+$(compose_security_opt_block)
+$(compose_logging_block)
+    volumes:
+      - ./${cfg}:/opt/openppp2/appsettings.json:ro
+    ports:
+      - "20000:20000/tcp"
+      - "20000:20000/udp"
+SERVEREOF
+}
+
+write_compose_client() {
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
+  compose_header > "$COMPOSE_FILE"
+  cat >> "$COMPOSE_FILE" <<CLIENTEOF
+services:
+  ${svc}:
+    image: ${image}
+    container_name: ${svc}
+    restart: unless-stopped
+$(compose_security_opt_block)
+$(compose_logging_block)
+    network_mode: host
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./${cfg}:/opt/openppp2/${cfg}:ro
+      - ./ip.txt:/opt/openppp2/ip.txt:ro
+      - ./dns-rules.txt:/opt/openppp2/dns-rules.txt:ro
+    command:
+      - "--mode=client"
+      - "--config=${cfg}"
+      - "--tun-host=no"
+      - "--tun=${tun_name}"
+      - "--tun-ip=${tun_ip}"
+      - "--tun-gw=${tun_gw}"
+      - "--tun-mask=30"
+      - "--tun-vnet=yes"
+      - "--tun-flash=no"
+      - "--tun-static=no"
+      - "--block-quic=yes"
+      - "--bypass-iplist=ip.txt"
+      - "--dns-rules=dns-rules.txt"
+      - "--dns=8.8.8.8"
+      - "--bypass-iplist-nic=${nic}"
+      - "--bypass-iplist-ngw"
+      - "${gw}"
+CLIENTEOF
+}
+
+append_compose_client() {
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
+  cat >> "$COMPOSE_FILE" <<APPENDEOF
+
+  ${svc}:
+    image: ${image}
+    container_name: ${svc}
+    restart: unless-stopped
+$(compose_security_opt_block)
+$(compose_logging_block)
+    network_mode: host
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./${cfg}:/opt/openppp2/${cfg}:ro
+      - ./${ipfile}:/opt/openppp2/ip.txt:ro
+      - ./${dnsfile}:/opt/openppp2/dns-rules.txt:ro
+    command:
+      - "--mode=client"
+      - "--config=${cfg}"
+      - "--tun-host=no"
+      - "--tun=${tun_name}"
+      - "--tun-ip=${tun_ip}"
+      - "--tun-gw=${tun_gw}"
+      - "--tun-mask=30"
+      - "--tun-vnet=yes"
+      - "--tun-flash=no"
+      - "--tun-static=no"
+      - "--block-quic=yes"
+      - "--bypass-iplist=ip.txt"
+      - "--dns-rules=dns-rules.txt"
+      - "--dns=8.8.8.8"
+      - "--bypass-iplist-nic=${nic}"
+      - "--bypass-iplist-ngw"
+      - "${gw}"
+APPENDEOF
+}
+
