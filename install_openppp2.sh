@@ -11,15 +11,6 @@ DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
 DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
-# =======================
-# NEW: client NIC override (does NOT affect server)
-# - If CLIENT_NIC is set, force client to use it.
-# - Else try DEFAULT_CLIENT_NIC (ens192) if it exists on client host.
-# - If not found, fall back to original auto-detection.
-# =======================
-DEFAULT_CLIENT_NIC="ens192"
-# =======================
-
 COMPOSE_KIND=""
 
 need_cmd() {
@@ -401,7 +392,7 @@ generate_seccomp_profile() {
   "syscalls": [
     {
       "names": [
-        "accept","accept4","access","adjtimex","alarm","bind","brk","capget","capset","chdir","chmod","chown","chown32","clock_adjtime","clock_adjtime64","clock_getres","clock_getres_time64","clock_gettime","clock_gettime64","clock_nanosleep","clock_nanosleep_time64","close","close_range","connect","copy_file_range","creat","dup","dup2","dup3","epoll_create","epoll_create1","epoll_ctl","epoll_ctl_old","epoll_pwait","epoll_pwait2","epoll_wait","epoll_wait_old","eventfd","eventfd2","execve","execveat","execveat","execveat","exit","exit_group","faccessat","faccessat2","fadvise64","fadvise64_64","fallocate","fanotify_mark","fchdir","fchmod","fchmodat","fchown","fchown32","fchownat","fcntl","fcntl64","fdatasync","fgetxattr","flistxattr","flock","fork","fremovexattr","fsetxattr","fstat","fstat64","fstatat64","fstatfs","fstatfs64","fsync","ftruncate","ftruncate64","futex","futex_time64","futimesat","getcpu","getcwd","getdents","getdents64","getegid","getegid32","geteuid","geteuid32","getgid","getgid32","getgroups","getgroups32","getitimer","getpeername","getpgid","getpgrp","getpid","getppid","getpriority","getrandom","getresgid","getresgid32","getresuid","getresuid32","getrlimit","get_robust_list","getrusage","getsid","getsockname","getsockopt","get_thread_area","gettid","gettimeofday","getuid","getuid32","getxattr","inotify_add_watch","inotify_init","inotify_init1","inotify_rm_watch","io_cancel","ioctl","io_destroy","io_getevents","io_pgetevents","io_pgetevents_time64","ioprio_get","ioprio_set","io_setup","io_submit","io_uring_enter","io_uring_register","io_uring_setup","ipc","kill","lchown","lchown32","lgetxattr","link","linkat","listen","listxattr","llistxattr","lremovexattr","lseek","lsetxattr","lstat","lstat64","madvise","membarrier","memfd_create","mincore","mkdir","mkdirat","mknod","mknodat","mlock","mlock2","mlockall","mmap","mmap2","mprotect","mq_getsetattr","mq_notify","mq_open","mq_timedreceive","mq_timedreceive_time64","mq_timedsend","mq_timedsend_time64","mq_unlink","mremap","msgctl","msgget","msgrcv","msgsnd","msync","munlock","munlockall","munmap","nanosleep","newfstatat","open","openat","openat2","pause","pipe","pipe2","poll","ppoll","ppoll_time64","prctl","pread64","preadv","preadv2","prlimit64","pselect6","pselect6_time64","pwrite64","pwritev","pwritev2","read","readahead","readlink","readlinkat","readv","recv","recvfrom","recvmmsg","recvmmsg_time64","recvmsg","remap_file_pages","removexattr","rename","renameat","renameat2","restart_syscall","rmdir","rt_sigaction","rt_sigpending","rt_sigprocmask","rt_sigqueueinfo","rt_sigreturn","rt_sigsuspend","rt_sigtimedwait","rt_sigtimedwait_time64","rt_tgsigqueueinfo","sched_getaffinity","sched_getattr","sched_getparam","sched_get_priority_max","sched_get_priority_min","sched_getscheduler","sched_rr_get_interval","sched_rr_get_interval_time64","sched_setaffinity","sched_setattr","sched_setparam","sched_setscheduler","sched_yield","seccomp","select","semctl","semget","semop","semtimedop","semtimedop_time64","send","sendfile","sendfile64","sendmmsg","sendmsg","sendto","setfsgid","setfsgid32","setfsuid","setfsuid32","setgid","setgid32","setgroups","setgroups32","setitimer","setpgid","setpriority","setregid","setregid32","setresgid","setresgid32","setresuid","setresuid32","setreuid","setreuid32","setrlimit","set_robust_list","setsid","setsockopt","set_thread_area","set_tid_address","setuid","setuid32","setxattr","shmat","shmctl","shmdt","shmget","shutdown","sigaltstack","signalfd","signalfd4","sigprocmask","sigreturn","socket","socketcall","socketpair","splice","stat","stat64","statfs","statfs64","statx","symlink","symlinkat","sync","sync_file_range","syncfs","sysinfo","tee","tgkill","time","timer_create","timer_delete","timer_getoverrun","timer_gettime","timer_gettime64","timer_settime","timer_settime64","timerfd_create","timerfd_gettime","timerfd_gettime64","timerfd_settime","timerfd_settime64","times","tkill","truncate","truncate64","ugetrlimit","umask","uname","unlink","unlinkat","utime","utimensat","utimensat_time64","utimes","vfork","vmsplice","wait4","waitid","waitpid","write","writev"
+        "accept","accept4","access","adjtimex","alarm","bind","brk","capget","capset","chdir","chmod","chown","chown32","clock_adjtime","clock_adjtime64","clock_getres","clock_getres_time64","clock_gettime","clock_gettime64","clock_nanosleep","clock_nanosleep_time64","close","close_range","connect","copy_file_range","creat","dup","dup2","dup3","epoll_create","epoll_create1","epoll_ctl","epoll_ctl_old","epoll_pwait","epoll_pwait2","epoll_wait","epoll_wait_old","eventfd","eventfd2","execve","execveat","exit","exit_group","faccessat","faccessat2","fadvise64","fadvise64_64","fallocate","fanotify_mark","fchdir","fchmod","fchmodat","fchown","fchown32","fchownat","fcntl","fcntl64","fdatasync","fgetxattr","flistxattr","flock","fork","fremovexattr","fsetxattr","fstat","fstat64","fstatat64","fstatfs","fstatfs64","fsync","ftruncate","ftruncate64","futex","futex_time64","futimesat","getcpu","getcwd","getdents","getdents64","getegid","getegid32","geteuid","geteuid32","getgid","getgid32","getgroups","getgroups32","getitimer","getpeername","getpgid","getpgrp","getpid","getppid","getpriority","getrandom","getresgid","getresgid32","getresuid","getresuid32","getrlimit","get_robust_list","getrusage","getsid","getsockname","getsockopt","get_thread_area","gettid","gettimeofday","getuid","getuid32","getxattr","inotify_add_watch","inotify_init","inotify_init1","inotify_rm_watch","io_cancel","ioctl","io_destroy","io_getevents","io_pgetevents","io_pgetevents_time64","ioprio_get","ioprio_set","io_setup","io_submit","io_uring_enter","io_uring_register","io_uring_setup","ipc","kill","lchown","lchown32","lgetxattr","link","linkat","listen","listxattr","llistxattr","lremovexattr","lseek","lsetxattr","lstat","lstat64","madvise","membarrier","memfd_create","mincore","mkdir","mkdirat","mknod","mknodat","mlock","mlock2","mlockall","mmap","mmap2","mprotect","mq_getsetattr","mq_notify","mq_open","mq_timedreceive","mq_timedreceive_time64","mq_timedsend","mq_timedsend_time64","mq_unlink","mremap","msgctl","msgget","msgrcv","msgsnd","msync","munlock","munlockall","munmap","nanosleep","newfstatat","open","openat","openat2","pause","pipe","pipe2","poll","ppoll","ppoll_time64","prctl","pread64","preadv","preadv2","prlimit64","pselect6","pselect6_time64","pwrite64","pwritev","pwritev2","read","readahead","readlink","readlinkat","readv","recv","recvfrom","recvmmsg","recvmmsg_time64","recvmsg","remap_file_pages","removexattr","rename","renameat","renameat2","restart_syscall","rmdir","rt_sigaction","rt_sigpending","rt_sigprocmask","rt_sigqueueinfo","rt_sigreturn","rt_sigsuspend","rt_sigtimedwait","rt_sigtimedwait_time64","rt_tgsigqueueinfo","sched_getaffinity","sched_getattr","sched_getparam","sched_get_priority_max","sched_get_priority_min","sched_getscheduler","sched_rr_get_interval","sched_rr_get_interval_time64","sched_setaffinity","sched_setattr","sched_setparam","sched_setscheduler","sched_yield","seccomp","select","semctl","semget","semop","semtimedop","semtimedop_time64","send","sendfile","sendfile64","sendmmsg","sendmsg","sendto","setfsgid","setfsgid32","setfsuid","setfsuid32","setgid","setgid32","setgroups","setgroups32","setitimer","setpgid","setpriority","setregid","setregid32","setresgid","setresgid32","setresuid","setresuid32","setreuid","setreuid32","setrlimit","set_robust_list","setsid","setsockopt","set_thread_area","set_tid_address","setuid","setuid32","setxattr","shmat","shmctl","shmdt","shmget","shutdown","sigaltstack","signalfd","signalfd4","sigprocmask","sigreturn","socket","socketcall","socketpair","splice","stat","stat64","statfs","statfs64","statx","symlink","symlinkat","sync","sync_file_range","syncfs","sysinfo","tee","tgkill","time","timer_create","timer_delete","timer_getoverrun","timer_gettime","timer_gettime64","timer_settime","timer_settime64","timerfd_create","timerfd_gettime","timerfd_gettime64","timerfd_settime","timerfd_settime64","times","tkill","truncate","truncate64","ugetrlimit","umask","uname","unlink","unlinkat","utime","utimensat","utimensat_time64","utimes","vfork","vmsplice","wait4","waitid","waitpid","write","writev"
       ],
       "action": "SCMP_ACT_ALLOW"
     },
@@ -686,55 +677,6 @@ health_check_one() {
   fi
 }
 
-# =======================
-# NEW: helpers for client NIC override
-# =======================
-get_iface_ipv4() {
-  local dev="$1"
-  ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1
-}
-
-get_iface_gw() {
-  local dev="$1"
-  ip -4 route show default dev "$dev" 2>/dev/null | awk 'NR==1{print $3}'
-}
-
-maybe_force_client_nic() {
-  # args: lan_var nic_var gw_var
-  local __lan_var="$1" __nic_var="$2" __gw_var="$3"
-  local lan="${!__lan_var-}" nic="${!__nic_var-}" gw="${!__gw_var-}"
-
-  local want="${CLIENT_NIC:-}"
-  if [[ -z "$want" ]]; then
-    want="$DEFAULT_CLIENT_NIC"
-  fi
-
-  # only apply if interface exists
-  if need_cmd ip && ip link show "$want" >/dev/null 2>&1; then
-    info "客户端网卡优先策略生效：使用 ${want}（可用 CLIENT_NIC 覆盖）"
-    local lan2 gw2
-    lan2="$(get_iface_ipv4 "$want" || true)"
-    gw2="$(get_iface_gw "$want" || true)"
-    if [[ -z "${lan2:-}" ]]; then
-      die "检测到网卡 ${want} 但未获取到 IPv4 地址，无法作为客户端 LAN 绑定。"
-    fi
-    nic="$want"
-    lan="$lan2"
-    [[ -n "${gw2:-}" ]] && gw="$gw2"
-  else
-    # if user explicitly set CLIENT_NIC but not found => fail fast
-    if [[ -n "${CLIENT_NIC:-}" ]]; then
-      die "已设置 CLIENT_NIC=${CLIENT_NIC} 但系统未找到该网卡（ip link show 失败）。"
-    fi
-    info "未找到默认客户端网卡 ${want}，继续使用自动探测网卡：${nic}"
-  fi
-
-  printf -v "$__lan_var" "%s" "$lan"
-  printf -v "$__nic_var" "%s" "$nic"
-  printf -v "$__gw_var"  "%s" "$gw"
-}
-# =======================
-
 do_install() {
   ensure_docker_stack
 
@@ -795,9 +737,6 @@ do_install() {
     netinfo="${netinfo#*|}"
     nic="${netinfo%%|*}"
     gw="${netinfo#*|}"
-
-    # NEW: force client NIC (server unaffected)
-    maybe_force_client_nic lan nic gw
 
     if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
       warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
@@ -988,9 +927,6 @@ do_add_client() {
   netinfo="${netinfo#*|}"
   nic="${netinfo%%|*}"
   gw="${netinfo#*|}"
-
-  # NEW: force client NIC (server unaffected)
-  maybe_force_client_nic lan nic gw
 
   if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
     warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
@@ -1336,15 +1272,282 @@ main() {
   esac
 }
 
-main "$@"
+############################################
+# PATCH SECTION (追加覆盖版)
+# - 1) Client 优先 ens192（支持 CLIENT_NIC=xxx 强制）
+# - 2) 重启后延迟 20 秒再拉起容器（systemd 控制）
+# - 3) 保留你原有的日志轮转覆盖
+# 说明：只通过“后定义函数覆盖前定义”的 Bash 机制生效
+############################################
+
+# 默认客户端网卡（存在才用；不存在回退原探测）
+DEFAULT_CLIENT_NIC="${DEFAULT_CLIENT_NIC:-ens192}"
+# 开机延迟（秒），默认 20；可用 OPENPPP2_BOOT_DELAY 覆盖；设 0 禁用
+DEFAULT_BOOT_DELAY="${DEFAULT_BOOT_DELAY:-20}"
+
+setup_systemd_boot_delay_start() {
+  if ! has_systemd; then
+    warn "无 systemd，跳过开机延迟启动。"
+    return 0
+  fi
+
+  local delay="${OPENPPP2_BOOT_DELAY:-$DEFAULT_BOOT_DELAY}"
+  if ! [[ "$delay" =~ ^[0-9]+$ ]]; then
+    warn "OPENPPP2_BOOT_DELAY 非纯数字：${delay}，回退为 ${DEFAULT_BOOT_DELAY}"
+    delay="$DEFAULT_BOOT_DELAY"
+  fi
+
+  if [[ "$delay" -le 0 ]]; then
+    info "OPENPPP2_BOOT_DELAY=${delay}：已禁用开机延迟启动（openppp2-boot.service）"
+    systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/openppp2-boot.service \
+          /usr/local/bin/openppp2-wait-uptime.sh \
+          /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  cat >/usr/local/bin/openppp2-wait-uptime.sh <<'WAITEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+delay="${1:-20}"
+if ! [[ "$delay" =~ ^[0-9]+$ ]]; then delay=20; fi
+up="$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)"
+if [[ "$up" -lt "$delay" ]]; then
+  sleep $(( delay - up ))
+fi
+WAITEOF
+  chmod +x /usr/local/bin/openppp2-wait-uptime.sh
+
+  cat >/usr/local/bin/openppp2-stack.sh <<'STACKEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /opt/openppp2 2>/dev/null || exit 0
+[[ -f docker-compose.yml ]] || exit 0
+
+if docker compose version >/dev/null 2>&1; then
+  dc=(docker compose)
+else
+  dc=(docker-compose)
+fi
+
+case "${1:-start}" in
+  start)
+    "${dc[@]}" up -d --remove-orphans
+    ;;
+  stop)
+    # down：防止 docker restart policy 抢跑（下次开机由本 service 延迟启动）
+    "${dc[@]}" down --remove-orphans || true
+    ;;
+  restart)
+    "${dc[@]}" down --remove-orphans || true
+    "${dc[@]}" up -d --remove-orphans
+    ;;
+  *)
+    echo "usage: $0 {start|stop|restart}" >&2
+    exit 2
+    ;;
+esac
+STACKEOF
+  chmod +x /usr/local/bin/openppp2-stack.sh
+
+  cat >/etc/systemd/system/openppp2-boot.service <<SERVICEEOF
+[Unit]
+Description=Delayed start openppp2 stack (wait uptime >= ${delay}s)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/local/bin/openppp2-wait-uptime.sh ${delay}
+ExecStart=/usr/local/bin/openppp2-stack.sh start
+ExecStop=/usr/local/bin/openppp2-stack.sh stop
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+  systemctl daemon-reload
+  systemctl enable --now openppp2-boot.service
+  info "已启用 openppp2-boot.service：开机后等待 uptime≥${delay}s 再启动 openppp2（关机时 down 防抢跑）"
+}
+
+# 覆盖：每周更新，末尾追加开机延迟启动启用
+setup_systemd_weekly_update() {
+  if ! has_systemd; then
+    warn "无 systemd，跳过定时更新。可用 crontab 定时执行 /usr/local/bin/openppp2-update.sh"
+    return 0
+  fi
+
+  echo
+  info "设置 systemd 每周自动更新（pull + up -d）"
+  local oncal
+  prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
+
+  cat >/usr/local/bin/openppp2-update.sh <<'UPDATEEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/openppp2
+
+if docker compose version >/dev/null 2>&1; then
+  dc=(docker compose)
+else
+  dc=(docker-compose)
+fi
+
+"${dc[@]}" pull
+"${dc[@]}" up -d --remove-orphans
+UPDATEEOF
+  chmod +x /usr/local/bin/openppp2-update.sh
+
+  cat >/etc/systemd/system/openppp2-update.service <<'SERVICEEOF'
+[Unit]
+Description=Update openppp2 container images
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openppp2-update.sh
+SERVICEEOF
+
+  cat >/etc/systemd/system/openppp2-update.timer <<TIMEREOF
+[Unit]
+Description=Run openppp2 update weekly
+
+[Timer]
+OnCalendar=${oncal}
+Persistent=true
+Unit=openppp2-update.service
+
+[Install]
+WantedBy=timers.target
+TIMEREOF
+
+  systemctl daemon-reload
+  systemctl enable --now openppp2-update.timer
+  info "已启用 openppp2-update.timer"
+
+  # NEW: 开机延迟启动（默认 20 秒）
+  setup_systemd_boot_delay_start
+}
+
+# 覆盖：卸载时额外清理 openppp2-boot.service
+do_uninstall() {
+  info "开始卸载 openppp2（不卸载 Docker）..."
+
+  if has_systemd; then
+    systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
+    systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
+  fi
+  rm -f /etc/systemd/system/openppp2-update.timer \
+        /etc/systemd/system/openppp2-update.service \
+        /usr/local/bin/openppp2-update.sh \
+        /etc/systemd/system/openppp2-boot.service \
+        /usr/local/bin/openppp2-wait-uptime.sh \
+        /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
+  if has_systemd; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  if need_cmd docker; then
+    docker rm -f watchtower >/dev/null 2>&1 || true
+  fi
+
+  if [[ -d "$APP_DIR" ]] && need_cmd docker; then
+    cd "$APP_DIR"
+    detect_compose >/dev/null 2>&1 || true
+    if [[ -n "$COMPOSE_KIND" ]]; then
+      info "停止并删除容器..."
+      compose down --remove-orphans >/dev/null 2>&1 || true
+    else
+      docker rm -f openppp2 >/dev/null 2>&1 || true
+    fi
+  fi
+
+  info "删除目录 ${APP_DIR} ..."
+  rm -rf "$APP_DIR"
+
+  rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
+  sysctl --system >/dev/null 2>&1 || true
+
+  remove_docker_proxy
+
+  echo "卸载完成。"
+}
+
+# 覆盖：客户端网卡选择优先 ens192（或 CLIENT_NIC 指定）
+detect_net() {
+  local out lan dev gw
+  local forced=""
+
+  if [[ -n "${CLIENT_NIC:-}" ]]; then
+    forced="${CLIENT_NIC}"
+    if ! ip link show "${forced}" >/dev/null 2>&1; then
+      die "已设置 CLIENT_NIC=${CLIENT_NIC} 但系统未找到该网卡（ip link show 失败）。"
+    fi
+  else
+    if ip link show "${DEFAULT_CLIENT_NIC}" >/dev/null 2>&1; then
+      forced="${DEFAULT_CLIENT_NIC}"
+    fi
+  fi
+
+  if [[ -n "${forced}" ]]; then
+    dev="${forced}"
+    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
+    gw="$(ip -4 route show default dev "$dev" 2>/dev/null | awk 'NR==1{print $3}')" || true
+
+    if [[ -n "${lan:-}" ]]; then
+      if [[ -z "${gw:-}" ]]; then
+        gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
+      fi
+      echo "${lan:-}|${dev:-}|${gw:-}"
+      return 0
+    fi
+
+    if [[ -n "${CLIENT_NIC:-}" ]]; then
+      die "CLIENT_NIC=${CLIENT_NIC} 存在但未获取到 IPv4 地址，无法作为客户端 LAN 绑定。"
+    fi
+    warn "默认客户端网卡 ${forced} 未获取到 IPv4，回退自动探测逻辑。"
+  fi
+
+  # ===== 原始探测逻辑保持不变 =====
+  dev="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')" || true
+  gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
+
+  if [[ -n "${dev:-}" ]]; then
+    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
+  fi
+
+  if [[ -z "${dev:-}" || -z "${lan:-}" ]]; then
+    out="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
+    lan="$(awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$out")"
+    dev="${dev:-$(awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
+    gw="${gw:-$(awk '/via/ {for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$out")}"
+  fi
+
+  if [[ "${dev:-}" =~ ^(ppp|tun|wg|tailscale|docker|br-|virbr|lo) ]] || [[ "${lan:-}" =~ ^10\. ]]; then
+    local cand cand_ip
+    cand="$(ip -o link show up | awk -F': ' '{print $2}' | grep -Ev '^(lo|ppp|tun|wg|tailscale|docker|br-|virbr)' | head -n1 || true)"
+    if [[ -n "$cand" ]]; then
+      cand_ip="$(ip -4 addr show "$cand" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
+      if [[ -n "$cand_ip" ]]; then
+        dev="$cand"
+        lan="$cand_ip"
+      fi
+    fi
+  fi
+
+  echo "${lan:-}|${dev:-}|${gw:-}"
+}
 
 ############################################
-# Docker 日志自动轮转（追加覆盖版）
-# 说明：
-# - 不修改你原有任何主体代码
-# - 仅通过“后定义函数覆盖前定义”的 Bash 机制生效
+# Docker 日志自动轮转（追加覆盖版）——保留你的写法
 ############################################
-
 compose_logging_block() {
   cat <<'LOGEOF'
     logging:
@@ -1454,3 +1657,6 @@ $(compose_logging_block)
       - "${gw}"
 APPENDEOF
 }
+
+# 关键：main 放到文件最后，保证以上“覆盖版”全部生效
+main "$@"
