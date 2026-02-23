@@ -799,7 +799,8 @@ do_install() {
     local tun_ip="10.0.0.2"
     local tun_gw="10.0.0.1"
 
-    local USE_MUX="no"
+    local USE_MUX
+    unset USE_MUX
     prompt USE_MUX "是否开启 mux？(yes/no)" "no"
     write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$tun_name" "$tun_ip" "$tun_gw" "$USE_MUX"
 
@@ -1014,7 +1015,8 @@ do_add_client() {
 
   enable_ip_forward_host
 
-  local USE_MUX="no"
+  local USE_MUX
+  unset USE_MUX
   prompt USE_MUX "是否开启 mux？(yes/no)" "no"
   append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}" "$USE_MUX"
 
