@@ -527,7 +527,7 @@ SERVEREOF
 }
 
 write_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8" use_mux="${9:-no}"
   compose_header > "$COMPOSE_FILE"
   cat >> "$COMPOSE_FILE" <<CLIENTEOF
 services:
@@ -564,10 +564,17 @@ $(compose_security_opt_block)
       - "--bypass-iplist-ngw"
       - "${gw}"
 CLIENTEOF
+  if [[ "$use_mux" == "yes" ]]; then
+    cat >> "$COMPOSE_FILE" <<MUXEOF
+      - "--tun-mux=12"
+      - "--tun-mux-acceleration=3"
+      - "--tun-ssmt=4/st"
+MUXEOF
+  fi
 }
 
 append_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}" use_mux="${11:-no}"
   cat >> "$COMPOSE_FILE" <<APPENDEOF
 
   ${svc}:
@@ -603,6 +610,13 @@ $(compose_security_opt_block)
       - "--bypass-iplist-ngw"
       - "${gw}"
 APPENDEOF
+  if [[ "$use_mux" == "yes" ]]; then
+    cat >> "$COMPOSE_FILE" <<MUXEOF
+      - "--tun-mux=12"
+      - "--tun-mux-acceleration=3"
+      - "--tun-ssmt=4/st"
+MUXEOF
+  fi
 }
 
 setup_systemd_weekly_update() {
@@ -785,7 +799,9 @@ do_install() {
     local tun_ip="10.0.0.2"
     local tun_gw="10.0.0.1"
 
-    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$tun_name" "$tun_ip" "$tun_gw"
+    local USE_MUX="no"
+    prompt USE_MUX "是否开启 mux？(yes/no)" "no"
+    write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$tun_name" "$tun_ip" "$tun_gw" "$USE_MUX"
 
     echo "client" > "${APP_DIR}/.role"
     echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
@@ -998,7 +1014,9 @@ do_add_client() {
 
   enable_ip_forward_host
 
-  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}"
+  local USE_MUX="no"
+  prompt USE_MUX "是否开启 mux？(yes/no)" "no"
+  append_compose_client "${IMAGE}" "${nic}" "${gw}" "${SVC_NAME}" "${CFG_NAME}" "${ipfile}" "${dnsfile}" "${tun_name}" "${tun_ip}" "${tun_gw}" "$USE_MUX"
 
   echo
   local USE_PROXY
@@ -1578,7 +1596,7 @@ SERVEREOF
 }
 
 write_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8"
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8" use_mux="${9:-no}"
   compose_header > "$COMPOSE_FILE"
   cat >> "$COMPOSE_FILE" <<CLIENTEOF
 services:
@@ -1616,10 +1634,17 @@ $(compose_logging_block)
       - "--bypass-iplist-ngw"
       - "${gw}"
 CLIENTEOF
+  if [[ "$use_mux" == "yes" ]]; then
+    cat >> "$COMPOSE_FILE" <<MUXEOF
+      - "--tun-mux=12"
+      - "--tun-mux-acceleration=3"
+      - "--tun-ssmt=4/st"
+MUXEOF
+  fi
 }
 
 append_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}"
+  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}" use_mux="${11:-no}"
   cat >> "$COMPOSE_FILE" <<APPENDEOF
 
   ${svc}:
@@ -1656,6 +1681,13 @@ $(compose_logging_block)
       - "--bypass-iplist-ngw"
       - "${gw}"
 APPENDEOF
+  if [[ "$use_mux" == "yes" ]]; then
+    cat >> "$COMPOSE_FILE" <<MUXEOF
+      - "--tun-mux=12"
+      - "--tun-mux-acceleration=3"
+      - "--tun-ssmt=4/st"
+MUXEOF
+  fi
 }
 
 # 关键：main 放到文件最后，保证以上“覆盖版”全部生效
