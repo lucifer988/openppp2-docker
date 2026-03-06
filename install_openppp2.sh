@@ -14,6 +14,15 @@ DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 COMPOSE_KIND=""
 APT_PROXY_PROMPTED=0
 
+# 默认客户端网卡（存在才优先用；不存在回退自动探测）
+DEFAULT_CLIENT_NIC="${DEFAULT_CLIENT_NIC:-ens192}"
+# 开机延迟（秒），默认 20；可用 OPENPPP2_BOOT_DELAY 覆盖；设 0 禁用
+DEFAULT_BOOT_DELAY="${DEFAULT_BOOT_DELAY:-20}"
+# 严格开机延迟模式：
+# yes = compose 不写 restart，完全交给 systemd 的 openppp2-boot.service 控制
+# no  = 保持 unless-stopped
+STRICT_BOOT_DELAY_MODE="${STRICT_BOOT_DELAY_MODE:-yes}"
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -130,13 +139,11 @@ detect_compose() {
 
 apt_install() {
   export DEBIAN_FRONTEND=noninteractive
-
-  # === FIX: avoid needrestart interactive prompt blocking scripts ===
   export NEEDRESTART_MODE=a
   export NEEDRESTART_SUSPEND=1
-  # ================================================================
 
   local proxy_cfg="/etc/apt/apt.conf.d/99temp-proxy"
+  local apt_log="/tmp/openppp2-apt-update.log"
 
   if [[ -n "${http_proxy:-}" || -n "${HTTP_PROXY:-}" ]]; then
     local proxy="${http_proxy:-${HTTP_PROXY:-}}"
@@ -148,16 +155,19 @@ APTPROXYEOF
   fi
 
   info "正在更新软件包列表（最多等待 120 秒）..."
-  if timeout 120 apt-get update -y 2>&1 | grep -v "^Get:" | grep -v "^Hit:" | grep -v "^Ign:" || true; then
+  rm -f "$apt_log" >/dev/null 2>&1 || true
+
+  if timeout 120 apt-get update >"$apt_log" 2>&1; then
     info "软件包列表更新完成"
   else
     warn "apt-get update 超时或失败，将继续尝试安装..."
+    tail -n 80 "$apt_log" >&2 || true
   fi
 
   info "正在安装必要工具：$*"
   apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold "$@"
 
-  rm -f "$proxy_cfg" >/dev/null 2>&1 || true
+  rm -f "$proxy_cfg" "$apt_log" >/dev/null 2>&1 || true
 }
 
 curl_retry() {
@@ -200,9 +210,9 @@ ensure_basic_tools() {
     missing_tools+=("iproute2")
   fi
 
-  missing_tools=($(printf '%s\n' "${missing_tools[@]}" | sort -u))
-
   if [[ "${#missing_tools[@]}" -gt 0 ]]; then
+    mapfile -t missing_tools < <(printf '%s\n' "${missing_tools[@]}" | sort -u)
+
     if need_cmd apt-get; then
       info "检测到缺少工具：${missing_tools[*]}"
       maybe_prompt_apt_proxy_for_client "$install_role"
@@ -230,12 +240,10 @@ start_docker_daemon_soft() {
   fi
 }
 
-# === FIX: correct daemon check (original had a syntax/logic bug) ===
 docker_daemon_ok() {
   need_cmd docker || return 1
   docker info >/dev/null 2>&1
 }
-# =================================================================
 
 print_docker_diagnose() {
   warn "Docker 诊断信息（用于排查 docker info 失败的真实原因）："
@@ -353,6 +361,37 @@ random_free_port() {
 
 detect_net() {
   local out lan dev gw
+  local forced=""
+
+  if [[ -n "${CLIENT_NIC:-}" ]]; then
+    forced="${CLIENT_NIC}"
+    if ! ip link show "${forced}" >/dev/null 2>&1; then
+      die "已设置 CLIENT_NIC=${CLIENT_NIC} 但系统未找到该网卡（ip link show 失败）。"
+    fi
+  else
+    if ip link show "${DEFAULT_CLIENT_NIC}" >/dev/null 2>&1; then
+      forced="${DEFAULT_CLIENT_NIC}"
+    fi
+  fi
+
+  if [[ -n "${forced}" ]]; then
+    dev="${forced}"
+    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
+    gw="$(ip -4 route show default dev "$dev" 2>/dev/null | awk 'NR==1{print $3}')" || true
+
+    if [[ -n "${lan:-}" ]]; then
+      if [[ -z "${gw:-}" ]]; then
+        gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
+      fi
+      echo "${lan:-}|${dev:-}|${gw:-}"
+      return 0
+    fi
+
+    if [[ -n "${CLIENT_NIC:-}" ]]; then
+      die "CLIENT_NIC=${CLIENT_NIC} 存在但未获取到 IPv4 地址，无法作为客户端 LAN 绑定。"
+    fi
+    warn "默认客户端网卡 ${forced} 未获取到 IPv4，回退自动探测逻辑。"
+  fi
 
   dev="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')" || true
   gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
@@ -537,12 +576,32 @@ compose_header() {
   fi
 }
 
+compose_restart_policy_block() {
+  if [[ "${STRICT_BOOT_DELAY_MODE}" == "yes" ]]; then
+    :
+  else
+    cat <<'RESTARTEOF'
+    restart: unless-stopped
+RESTARTEOF
+  fi
+}
+
 compose_security_opt_block() {
   cat <<'SECOPTEOF'
     security_opt:
       - seccomp=./seccomp-openppp2.json
       - apparmor=unconfined
 SECOPTEOF
+}
+
+compose_logging_block() {
+  cat <<'LOGEOF'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+LOGEOF
 }
 
 write_compose_server() {
@@ -553,8 +612,9 @@ services:
   openppp2:
     image: ${image}
     container_name: openppp2
-    restart: unless-stopped
+$(compose_restart_policy_block)
 $(compose_security_opt_block)
+$(compose_logging_block)
     volumes:
       - ./${cfg}:/opt/openppp2/appsettings.json:ro
     ports:
@@ -571,8 +631,9 @@ services:
   ${svc}:
     image: ${image}
     container_name: ${svc}
-    restart: unless-stopped
+$(compose_restart_policy_block)
 $(compose_security_opt_block)
+$(compose_logging_block)
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -594,8 +655,8 @@ $(compose_security_opt_block)
       - "--tun-flash=no"
       - "--tun-static=no"
       - "--block-quic=yes"
-      - "--bypass-iplist=ip.txt"
-      - "--dns-rules=dns-rules.txt"
+      - "--bypass-iplist=/opt/openppp2/ip.txt"
+      - "--dns-rules=/opt/openppp2/dns-rules.txt"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
@@ -617,8 +678,9 @@ append_compose_client() {
   ${svc}:
     image: ${image}
     container_name: ${svc}
-    restart: unless-stopped
+$(compose_restart_policy_block)
 $(compose_security_opt_block)
+$(compose_logging_block)
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -640,8 +702,8 @@ $(compose_security_opt_block)
       - "--tun-flash=no"
       - "--tun-static=no"
       - "--block-quic=yes"
-      - "--bypass-iplist=ip.txt"
-      - "--dns-rules=dns-rules.txt"
+      - "--bypass-iplist=/opt/openppp2/ip.txt"
+      - "--dns-rules=/opt/openppp2/dns-rules.txt"
       - "--dns=8.8.8.8"
       - "--bypass-iplist-nic=${nic}"
       - "--bypass-iplist-ngw"
@@ -654,6 +716,96 @@ APPENDEOF
       - "--tun-ssmt=4/st"
 MUXEOF
   fi
+}
+
+setup_systemd_boot_delay_start() {
+  if ! has_systemd; then
+    warn "无 systemd，跳过开机延迟启动。"
+    return 0
+  fi
+
+  local delay="${OPENPPP2_BOOT_DELAY:-$DEFAULT_BOOT_DELAY}"
+  if ! [[ "$delay" =~ ^[0-9]+$ ]]; then
+    warn "OPENPPP2_BOOT_DELAY 非纯数字：${delay}，回退为 ${DEFAULT_BOOT_DELAY}"
+    delay="$DEFAULT_BOOT_DELAY"
+  fi
+
+  if [[ "$delay" -le 0 ]]; then
+    info "OPENPPP2_BOOT_DELAY=${delay}：已禁用开机延迟启动（openppp2-boot.service）"
+    systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/openppp2-boot.service \
+          /usr/local/bin/openppp2-wait-uptime.sh \
+          /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  cat >/usr/local/bin/openppp2-wait-uptime.sh <<'WAITEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+delay="${1:-20}"
+if ! [[ "$delay" =~ ^[0-9]+$ ]]; then delay=20; fi
+up="$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)"
+if [[ "$up" -lt "$delay" ]]; then
+  sleep $(( delay - up ))
+fi
+WAITEOF
+  chmod +x /usr/local/bin/openppp2-wait-uptime.sh
+
+  cat >/usr/local/bin/openppp2-stack.sh <<'STACKEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /opt/openppp2 2>/dev/null || exit 0
+[[ -f docker-compose.yml ]] || exit 0
+
+if docker compose version >/dev/null 2>&1; then
+  dc=(docker compose)
+else
+  dc=(docker-compose)
+fi
+
+case "${1:-start}" in
+  start)
+    "${dc[@]}" up -d --remove-orphans
+    ;;
+  stop)
+    "${dc[@]}" down --remove-orphans || true
+    ;;
+  restart)
+    "${dc[@]}" down --remove-orphans || true
+    "${dc[@]}" up -d --remove-orphans
+    ;;
+  *)
+    echo "usage: $0 {start|stop|restart}" >&2
+    exit 2
+    ;;
+esac
+STACKEOF
+  chmod +x /usr/local/bin/openppp2-stack.sh
+
+  cat >/etc/systemd/system/openppp2-boot.service <<SERVICEEOF
+[Unit]
+Description=Delayed start openppp2 stack (wait uptime >= ${delay}s)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/local/bin/openppp2-wait-uptime.sh ${delay}
+ExecStart=/usr/local/bin/openppp2-stack.sh start
+ExecStop=/usr/local/bin/openppp2-stack.sh stop
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+  systemctl daemon-reload
+  systemctl enable --now openppp2-boot.service
+  info "已启用 openppp2-boot.service：开机后等待 uptime≥${delay}s 再启动 openppp2（关机时 down 防抢跑）"
 }
 
 setup_systemd_weekly_update() {
@@ -710,6 +862,8 @@ TIMEREOF
   systemctl daemon-reload
   systemctl enable --now openppp2-update.timer
   info "已启用 openppp2-update.timer"
+
+  setup_systemd_boot_delay_start
 }
 
 health_check_one() {
@@ -883,7 +1037,7 @@ do_install() {
   compose up -d --remove-orphans
 
   if [[ "$ROLE" == "2" ]]; then
-    if [[ "$proxy_configured" -eq 1 ]]; then
+    if [[ "${proxy_configured:-0}" -eq 1 ]]; then
       remove_docker_proxy
     fi
 
@@ -907,10 +1061,14 @@ do_uninstall() {
 
   if has_systemd; then
     systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
+    systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
   fi
   rm -f /etc/systemd/system/openppp2-update.timer \
         /etc/systemd/system/openppp2-update.service \
-        /usr/local/bin/openppp2-update.sh >/dev/null 2>&1 || true
+        /usr/local/bin/openppp2-update.sh \
+        /etc/systemd/system/openppp2-boot.service \
+        /usr/local/bin/openppp2-wait-uptime.sh \
+        /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
   if has_systemd; then
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
@@ -1010,7 +1168,7 @@ do_add_client() {
   local SERVER_URI="ppp://${SERVER_IP}:${SERVER_PORT}/"
 
   local idx=2
-  while grep -q "openppp2-${idx}:" "$COMPOSE_FILE" 2>/dev/null; do
+  while grep -qE "^[[:space:]]{2}openppp2-${idx}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null; do
     idx=$(( idx + 1 ))
   done
   local default_svc="openppp2-${idx}"
@@ -1018,11 +1176,9 @@ do_add_client() {
   local SVC_NAME
   prompt SVC_NAME "请输入新客户端实例名称（容器/服务名）" "$default_svc"
 
-  # === small robustness: check under services indentation ===
   if grep -qE "^[[:space:]]{2}${SVC_NAME}:[[:space:]]*$" "$COMPOSE_FILE" 2>/dev/null; then
     die "服务名 ${SVC_NAME} 已存在，请换一个名称。"
   fi
-  # =========================================================
 
   local cfg_default="appsettings-${SVC_NAME}.json"
   local CFG_NAME
@@ -1333,405 +1489,4 @@ main() {
   esac
 }
 
-############################################
-# PATCH SECTION (追加覆盖版)
-# - 1) Client 优先 ens192（支持 CLIENT_NIC=xxx 强制）
-# - 2) 重启后延迟 20 秒再拉起容器（systemd 控制）
-# - 3) 保留你原有的日志轮转覆盖
-# 说明：只通过“后定义函数覆盖前定义”的 Bash 机制生效
-############################################
-
-# 默认客户端网卡（存在才用；不存在回退原探测）
-DEFAULT_CLIENT_NIC="${DEFAULT_CLIENT_NIC:-ens192}"
-# 开机延迟（秒），默认 20；可用 OPENPPP2_BOOT_DELAY 覆盖；设 0 禁用
-DEFAULT_BOOT_DELAY="${DEFAULT_BOOT_DELAY:-20}"
-
-setup_systemd_boot_delay_start() {
-  if ! has_systemd; then
-    warn "无 systemd，跳过开机延迟启动。"
-    return 0
-  fi
-
-  local delay="${OPENPPP2_BOOT_DELAY:-$DEFAULT_BOOT_DELAY}"
-  if ! [[ "$delay" =~ ^[0-9]+$ ]]; then
-    warn "OPENPPP2_BOOT_DELAY 非纯数字：${delay}，回退为 ${DEFAULT_BOOT_DELAY}"
-    delay="$DEFAULT_BOOT_DELAY"
-  fi
-
-  if [[ "$delay" -le 0 ]]; then
-    info "OPENPPP2_BOOT_DELAY=${delay}：已禁用开机延迟启动（openppp2-boot.service）"
-    systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
-    rm -f /etc/systemd/system/openppp2-boot.service \
-          /usr/local/bin/openppp2-wait-uptime.sh \
-          /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    return 0
-  fi
-
-  cat >/usr/local/bin/openppp2-wait-uptime.sh <<'WAITEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-delay="${1:-20}"
-if ! [[ "$delay" =~ ^[0-9]+$ ]]; then delay=20; fi
-up="$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)"
-if [[ "$up" -lt "$delay" ]]; then
-  sleep $(( delay - up ))
-fi
-WAITEOF
-  chmod +x /usr/local/bin/openppp2-wait-uptime.sh
-
-  cat >/usr/local/bin/openppp2-stack.sh <<'STACKEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-cd /opt/openppp2 2>/dev/null || exit 0
-[[ -f docker-compose.yml ]] || exit 0
-
-if docker compose version >/dev/null 2>&1; then
-  dc=(docker compose)
-else
-  dc=(docker-compose)
-fi
-
-case "${1:-start}" in
-  start)
-    "${dc[@]}" up -d --remove-orphans
-    ;;
-  stop)
-    # down：防止 docker restart policy 抢跑（下次开机由本 service 延迟启动）
-    "${dc[@]}" down --remove-orphans || true
-    ;;
-  restart)
-    "${dc[@]}" down --remove-orphans || true
-    "${dc[@]}" up -d --remove-orphans
-    ;;
-  *)
-    echo "usage: $0 {start|stop|restart}" >&2
-    exit 2
-    ;;
-esac
-STACKEOF
-  chmod +x /usr/local/bin/openppp2-stack.sh
-
-  cat >/etc/systemd/system/openppp2-boot.service <<SERVICEEOF
-[Unit]
-Description=Delayed start openppp2 stack (wait uptime >= ${delay}s)
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/usr/local/bin/openppp2-wait-uptime.sh ${delay}
-ExecStart=/usr/local/bin/openppp2-stack.sh start
-ExecStop=/usr/local/bin/openppp2-stack.sh stop
-TimeoutStartSec=0
-
-[Install]
-WantedBy=multi-user.target
-SERVICEEOF
-
-  systemctl daemon-reload
-  systemctl enable --now openppp2-boot.service
-  info "已启用 openppp2-boot.service：开机后等待 uptime≥${delay}s 再启动 openppp2（关机时 down 防抢跑）"
-}
-
-# 覆盖：每周更新，末尾追加开机延迟启动启用
-setup_systemd_weekly_update() {
-  if ! has_systemd; then
-    warn "无 systemd，跳过定时更新。可用 crontab 定时执行 /usr/local/bin/openppp2-update.sh"
-    return 0
-  fi
-
-  echo
-  info "设置 systemd 每周自动更新（pull + up -d）"
-  local oncal
-  prompt oncal "请输入 OnCalendar（按周）表达式" "${DEFAULT_ONCAL}"
-
-  cat >/usr/local/bin/openppp2-update.sh <<'UPDATEEOF'
-#!/usr/bin/env bash
-set -euo pipefail
-cd /opt/openppp2
-
-if docker compose version >/dev/null 2>&1; then
-  dc=(docker compose)
-else
-  dc=(docker-compose)
-fi
-
-"${dc[@]}" pull
-"${dc[@]}" up -d --remove-orphans
-UPDATEEOF
-  chmod +x /usr/local/bin/openppp2-update.sh
-
-  cat >/etc/systemd/system/openppp2-update.service <<'SERVICEEOF'
-[Unit]
-Description=Update openppp2 container images
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/openppp2-update.sh
-SERVICEEOF
-
-  cat >/etc/systemd/system/openppp2-update.timer <<TIMEREOF
-[Unit]
-Description=Run openppp2 update weekly
-
-[Timer]
-OnCalendar=${oncal}
-Persistent=true
-Unit=openppp2-update.service
-
-[Install]
-WantedBy=timers.target
-TIMEREOF
-
-  systemctl daemon-reload
-  systemctl enable --now openppp2-update.timer
-  info "已启用 openppp2-update.timer"
-
-  # NEW: 开机延迟启动（默认 20 秒）
-  setup_systemd_boot_delay_start
-}
-
-# 覆盖：卸载时额外清理 openppp2-boot.service
-do_uninstall() {
-  info "开始卸载 openppp2（不卸载 Docker）..."
-
-  if has_systemd; then
-    systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
-    systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
-  fi
-  rm -f /etc/systemd/system/openppp2-update.timer \
-        /etc/systemd/system/openppp2-update.service \
-        /usr/local/bin/openppp2-update.sh \
-        /etc/systemd/system/openppp2-boot.service \
-        /usr/local/bin/openppp2-wait-uptime.sh \
-        /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
-  if has_systemd; then
-    systemctl daemon-reload >/dev/null 2>&1 || true
-  fi
-
-  if need_cmd docker; then
-    docker rm -f watchtower >/dev/null 2>&1 || true
-  fi
-
-  if [[ -d "$APP_DIR" ]] && need_cmd docker; then
-    cd "$APP_DIR"
-    detect_compose >/dev/null 2>&1 || true
-    if [[ -n "$COMPOSE_KIND" ]]; then
-      info "停止并删除容器..."
-      compose down --remove-orphans >/dev/null 2>&1 || true
-    else
-      docker rm -f openppp2 >/dev/null 2>&1 || true
-    fi
-  fi
-
-  info "删除目录 ${APP_DIR} ..."
-  rm -rf "$APP_DIR"
-
-  rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
-  sysctl --system >/dev/null 2>&1 || true
-
-  remove_docker_proxy
-
-  echo "卸载完成。"
-}
-
-# 覆盖：客户端网卡选择优先 ens192（或 CLIENT_NIC 指定）
-detect_net() {
-  local out lan dev gw
-  local forced=""
-
-  if [[ -n "${CLIENT_NIC:-}" ]]; then
-    forced="${CLIENT_NIC}"
-    if ! ip link show "${forced}" >/dev/null 2>&1; then
-      die "已设置 CLIENT_NIC=${CLIENT_NIC} 但系统未找到该网卡（ip link show 失败）。"
-    fi
-  else
-    if ip link show "${DEFAULT_CLIENT_NIC}" >/dev/null 2>&1; then
-      forced="${DEFAULT_CLIENT_NIC}"
-    fi
-  fi
-
-  if [[ -n "${forced}" ]]; then
-    dev="${forced}"
-    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
-    gw="$(ip -4 route show default dev "$dev" 2>/dev/null | awk 'NR==1{print $3}')" || true
-
-    if [[ -n "${lan:-}" ]]; then
-      if [[ -z "${gw:-}" ]]; then
-        gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
-      fi
-      echo "${lan:-}|${dev:-}|${gw:-}"
-      return 0
-    fi
-
-    if [[ -n "${CLIENT_NIC:-}" ]]; then
-      die "CLIENT_NIC=${CLIENT_NIC} 存在但未获取到 IPv4 地址，无法作为客户端 LAN 绑定。"
-    fi
-    warn "默认客户端网卡 ${forced} 未获取到 IPv4，回退自动探测逻辑。"
-  fi
-
-  # ===== 原始探测逻辑保持不变 =====
-  dev="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')" || true
-  gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
-
-  if [[ -n "${dev:-}" ]]; then
-    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
-  fi
-
-  if [[ -z "${dev:-}" || -z "${lan:-}" ]]; then
-    out="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
-    lan="$(awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$out")"
-    dev="${dev:-$(awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
-    gw="${gw:-$(awk '/via/ {for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$out")}"
-  fi
-
-  if [[ "${dev:-}" =~ ^(ppp|tun|wg|tailscale|docker|br-|virbr|lo) ]] || [[ "${lan:-}" =~ ^10\. ]]; then
-    local cand cand_ip
-    cand="$(ip -o link show up | awk -F': ' '{print $2}' | grep -Ev '^(lo|ppp|tun|wg|tailscale|docker|br-|virbr)' | head -n1 || true)"
-    if [[ -n "$cand" ]]; then
-      cand_ip="$(ip -4 addr show "$cand" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
-      if [[ -n "$cand_ip" ]]; then
-        dev="$cand"
-        lan="$cand_ip"
-      fi
-    fi
-  fi
-
-  echo "${lan:-}|${dev:-}|${gw:-}"
-}
-
-############################################
-# Docker 日志自动轮转（追加覆盖版）——保留你的写法
-############################################
-compose_logging_block() {
-  cat <<'LOGEOF'
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "5"
-LOGEOF
-}
-
-write_compose_server() {
-  local image="$1" cfg="$2"
-  compose_header > "$COMPOSE_FILE"
-  cat >> "$COMPOSE_FILE" <<SERVEREOF
-services:
-  openppp2:
-    image: ${image}
-    container_name: openppp2
-    restart: unless-stopped
-$(compose_security_opt_block)
-$(compose_logging_block)
-    volumes:
-      - ./${cfg}:/opt/openppp2/appsettings.json:ro
-    ports:
-      - "20000:20000/tcp"
-      - "20000:20000/udp"
-SERVEREOF
-}
-
-write_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8" use_mux="${9:-no}"
-  compose_header > "$COMPOSE_FILE"
-  cat >> "$COMPOSE_FILE" <<CLIENTEOF
-services:
-  ${svc}:
-    image: ${image}
-    container_name: ${svc}
-    restart: unless-stopped
-$(compose_security_opt_block)
-$(compose_logging_block)
-    network_mode: host
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-    volumes:
-      - ./${cfg}:/opt/openppp2/${cfg}:ro
-      - ./ip.txt:/opt/openppp2/ip.txt:ro
-      - ./dns-rules.txt:/opt/openppp2/dns-rules.txt:ro
-    command:
-      - "--mode=client"
-      - "--config=${cfg}"
-      - "--tun-host=no"
-      - "--tun=${tun_name}"
-      - "--tun-ip=${tun_ip}"
-      - "--tun-gw=${tun_gw}"
-      - "--tun-mask=30"
-      - "--tun-vnet=yes"
-      - "--tun-flash=no"
-      - "--tun-static=no"
-      - "--block-quic=yes"
-      - "--bypass-iplist=ip.txt"
-      - "--dns-rules=dns-rules.txt"
-      - "--dns=8.8.8.8"
-      - "--bypass-iplist-nic=${nic}"
-      - "--bypass-iplist-ngw"
-      - "${gw}"
-CLIENTEOF
-  if [[ "$use_mux" == "yes" ]]; then
-    cat >> "$COMPOSE_FILE" <<MUXEOF
-      - "--tun-mux=12"
-      - "--tun-mux-acceleration=3"
-      - "--tun-ssmt=4/st"
-MUXEOF
-  fi
-}
-
-append_compose_client() {
-  local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" ipfile="$6" dnsfile="$7" tun_name="$8" tun_ip="$9" tun_gw="${10}" use_mux="${11:-no}"
-  cat >> "$COMPOSE_FILE" <<APPENDEOF
-
-  ${svc}:
-    image: ${image}
-    container_name: ${svc}
-    restart: unless-stopped
-$(compose_security_opt_block)
-$(compose_logging_block)
-    network_mode: host
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-    volumes:
-      - ./${cfg}:/opt/openppp2/${cfg}:ro
-      - ./${ipfile}:/opt/openppp2/ip.txt:ro
-      - ./${dnsfile}:/opt/openppp2/dns-rules.txt:ro
-    command:
-      - "--mode=client"
-      - "--config=${cfg}"
-      - "--tun-host=no"
-      - "--tun=${tun_name}"
-      - "--tun-ip=${tun_ip}"
-      - "--tun-gw=${tun_gw}"
-      - "--tun-mask=30"
-      - "--tun-vnet=yes"
-      - "--tun-flash=no"
-      - "--tun-static=no"
-      - "--block-quic=yes"
-      - "--bypass-iplist=ip.txt"
-      - "--dns-rules=dns-rules.txt"
-      - "--dns=8.8.8.8"
-      - "--bypass-iplist-nic=${nic}"
-      - "--bypass-iplist-ngw"
-      - "${gw}"
-APPENDEOF
-  if [[ "$use_mux" == "yes" ]]; then
-    cat >> "$COMPOSE_FILE" <<MUXEOF
-      - "--tun-mux=12"
-      - "--tun-mux-acceleration=3"
-      - "--tun-ssmt=4/st"
-MUXEOF
-  fi
-}
-
-# 关键：main 放到文件最后，保证以上“覆盖版”全部生效
 main "$@"
