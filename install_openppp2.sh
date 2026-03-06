@@ -12,6 +12,7 @@ DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
 COMPOSE_KIND=""
+APT_PROXY_PROMPTED=0
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -70,6 +71,40 @@ prompt_port() {
     fi
     warn "端口必须是 1-65535 的纯数字（你输入的是：$p），请重新输入。"
   done
+}
+
+maybe_prompt_apt_proxy_for_client() {
+  local install_role="${1:-unknown}"
+
+  if [[ "$install_role" != "client" ]]; then
+    return 0
+  fi
+
+  if [[ "${APT_PROXY_PROMPTED:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  APT_PROXY_PROMPTED=1
+
+  if [[ -n "${http_proxy:-}" || -n "${HTTP_PROXY:-}" ]]; then
+    info "检测到现有代理环境变量，客户端 APT 将直接复用该代理。"
+    return 0
+  fi
+
+  echo
+  local USE_APT_PROXY
+  prompt USE_APT_PROXY "客户端安装依赖时，是否需要为 APT 配置 HTTP 代理加速下载？（yes/no）" "no"
+
+  if [[ "$USE_APT_PROXY" == "yes" ]]; then
+    local APT_PROXY_URL
+    prompt APT_PROXY_URL "请输入 APT 代理地址（例如 http://127.0.0.1:7890）" "http://127.0.0.1:7890"
+    export http_proxy="$APT_PROXY_URL"
+    export https_proxy="$APT_PROXY_URL"
+    export HTTP_PROXY="$APT_PROXY_URL"
+    export HTTPS_PROXY="$APT_PROXY_URL"
+    info "已设置 APT 代理：${APT_PROXY_URL}"
+  else
+    info "客户端未启用 APT 代理，继续直连安装依赖。"
+  fi
 }
 
 compose() {
@@ -146,6 +181,8 @@ APTEOF
 }
 
 ensure_basic_tools() {
+  local install_role="${1:-unknown}"
+
   force_apt_ipv4
 
   local missing_tools=()
@@ -168,21 +205,7 @@ ensure_basic_tools() {
   if [[ "${#missing_tools[@]}" -gt 0 ]]; then
     if need_cmd apt-get; then
       info "检测到缺少工具：${missing_tools[*]}"
-
-      if [[ -z "${http_proxy:-}" && -z "${HTTP_PROXY:-}" ]]; then
-        echo
-        local USE_APT_PROXY
-        prompt USE_APT_PROXY "是否需要为 APT 配置 HTTP 代理加速下载？（yes/no）" "no"
-
-        if [[ "$USE_APT_PROXY" == "yes" ]]; then
-          local APT_PROXY_URL
-          prompt APT_PROXY_URL "请输入 APT 代理地址（例如 http://127.0.0.1:7890）" "http://127.0.0.1:7890"
-          export http_proxy="$APT_PROXY_URL"
-          export https_proxy="$APT_PROXY_URL"
-          info "已设置代理：${APT_PROXY_URL}"
-        fi
-      fi
-
+      maybe_prompt_apt_proxy_for_client "$install_role"
       apt_install ca-certificates curl jq iproute2 gnupg
     else
       die "缺少必要工具且无法自动安装（非 apt 环境）：${missing_tools[*]}"
@@ -230,18 +253,30 @@ print_docker_diagnose() {
 }
 
 install_docker_from_debian() {
-  info "尝试通过 Debian/Ubuntu 仓库安装 docker.io ..."
-  apt_install docker.io
+  local install_role="${1:-unknown}"
+
+  maybe_prompt_apt_proxy_for_client "$install_role"
+
+  info "尝试通过 Docker 官方安装脚本安装 Docker ..."
+  local docker_install_script="/tmp/get-docker.sh"
+
+  curl_retry -fsSL https://get.docker.com -o "$docker_install_script" || die "下载 Docker 官方安装脚本失败。"
+  sh "$docker_install_script" || die "执行 Docker 官方安装脚本失败。"
+  rm -f "$docker_install_script" >/dev/null 2>&1 || true
+
   start_docker_daemon_soft
   return 0
 }
 
 install_docker_compose_plugin_if_missing() {
+  local install_role="${1:-unknown}"
+
   if need_cmd docker && docker compose version >/dev/null 2>&1; then
     return 0
   fi
 
   if need_cmd apt-get; then
+    maybe_prompt_apt_proxy_for_client "$install_role"
     info "正在安装 docker-compose-plugin..."
     apt_install docker-compose-plugin || true
   fi
@@ -251,6 +286,7 @@ install_docker_compose_plugin_if_missing() {
   fi
 
   if ! need_cmd docker-compose && need_cmd apt-get; then
+    maybe_prompt_apt_proxy_for_client "$install_role"
     info "正在安装 docker-compose（兼容模式）..."
     apt_install docker-compose || true
   fi
@@ -259,19 +295,20 @@ install_docker_compose_plugin_if_missing() {
 }
 
 ensure_docker_stack() {
-  ensure_basic_tools
+  local install_role="${1:-unknown}"
+
+  ensure_basic_tools "$install_role"
 
   if docker_daemon_ok; then
     info "已检测到可用的 Docker 环境。"
   else
-    # === FIX: Debian + Ubuntu both use apt; don't rely on /etc/debian_version ===
-    if need_cmd apt-get; then
-      warn "当前系统未检测到可用的 Docker，尝试通过 apt 安装 docker.io ..."
-      install_docker_from_debian || warn "通过 apt 安装 docker.io 失败，请手动安装 Docker。"
+    if ! need_cmd docker; then
+      warn "当前系统未检测到 docker，尝试通过 Docker 官方安装脚本安装 ..."
+      install_docker_from_debian "$install_role" || warn "通过官方安装脚本安装 Docker 失败，请手动安装 Docker。"
     else
-      warn "系统未检测到 docker，且无法自动安装（非 apt 环境）。"
+      warn "已检测到 docker CLI，但 daemon 当前不可用，尝试启动 docker 服务..."
+      start_docker_daemon_soft
     fi
-    # ==========================================================================
   fi
 
   if ! docker_daemon_ok; then
@@ -279,7 +316,7 @@ ensure_docker_stack() {
     die "Docker daemon 不可用（或 docker CLI 无法连接）。请先确保 docker info 正常后再运行脚本。"
   fi
 
-  install_docker_compose_plugin_if_missing
+  install_docker_compose_plugin_if_missing "$install_role"
 
   if ! detect_compose; then
     die "未检测到 docker compose 或 docker-compose。请先安装 compose 后再运行脚本。"
@@ -692,8 +729,6 @@ health_check_one() {
 }
 
 do_install() {
-  ensure_docker_stack
-
   echo "=============================="
   echo "  请选择安装/部署角色："
   echo "    1) 服务端（Server）"
@@ -701,6 +736,12 @@ do_install() {
   echo "=============================="
   local ROLE
   prompt ROLE "请输入数字选择（1 或 2）" "1"
+
+  case "$ROLE" in
+    1) ensure_docker_stack "server" ;;
+    2) ensure_docker_stack "client" ;;
+    *) die "角色选择错误，只能输入 1 或 2。" ;;
+  esac
 
   local IMAGE BASE_URL
   prompt IMAGE "请输入镜像地址" "${DEFAULT_IMAGE}"
@@ -901,7 +942,7 @@ do_uninstall() {
 }
 
 do_add_client() {
-  ensure_docker_stack
+  ensure_docker_stack "client"
 
   if [[ ! -d "$APP_DIR" ]] || [[ ! -f "$COMPOSE_FILE" ]]; then
     die "未检测到已有安装，请先用 1) 安装 openppp2（client）后再用 3) 新增。"
@@ -1198,7 +1239,7 @@ select_cfg_interactive() {
 }
 
 do_delete_client() {
-  ensure_docker_stack
+  ensure_docker_stack "client"
 
   [[ -d "$APP_DIR" ]] || die "未检测到 ${APP_DIR}，请先安装。"
   [[ -f "$COMPOSE_FILE" ]] || die "未找到 ${COMPOSE_FILE}，请先安装。"
