@@ -21,7 +21,8 @@ DEFAULT_BOOT_DELAY="${DEFAULT_BOOT_DELAY:-20}"
 # 严格开机延迟模式：
 # yes = compose 不写 restart，完全交给 systemd 的 openppp2-boot.service 控制
 # no  = 保持 unless-stopped
-STRICT_BOOT_DELAY_MODE="${STRICT_BOOT_DELAY_MODE:-yes}"
+# 默认改为 no，避免镜像拉取完成后因 Docker 重启/代理清理导致容器退出后不再自动拉起
+STRICT_BOOT_DELAY_MODE="${STRICT_BOOT_DELAY_MODE:-no}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -556,6 +557,8 @@ PROXYEOF
 }
 
 remove_docker_proxy() {
+  local restart_docker_after_remove="${1:-yes}"
+
   if ! has_systemd; then
     return 0
   fi
@@ -564,9 +567,22 @@ remove_docker_proxy() {
     info "删除 Docker 代理配置..."
     rm -f /etc/systemd/system/docker.service.d/http-proxy.conf
     systemctl daemon-reload
-    systemctl restart docker
-    sleep 2
-    info "Docker 代理配置已删除"
+
+    if [[ "$restart_docker_after_remove" == "yes" ]]; then
+      systemctl restart docker
+      sleep 2
+      info "Docker 代理配置已删除"
+    else
+      warn "已删除 Docker 代理配置文件，但未立即重启 Docker。"
+      warn "当前 Docker daemon 仍可能继续使用旧代理，直到你手动执行：systemctl restart docker"
+    fi
+  fi
+}
+
+cleanup_docker_proxy_after_pull() {
+  local proxy_configured="${1:-0}"
+  if [[ "$proxy_configured" -eq 1 ]]; then
+    remove_docker_proxy "no"
   fi
 }
 
@@ -908,6 +924,9 @@ do_install() {
 
   docker rm -f watchtower >/dev/null 2>&1 || true
 
+  local proxy_configured=0
+  local proxy_cleanup_deferred=0
+
   if [[ "$ROLE" == "1" ]]; then
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的服务端配置文件名称（例如 appsettings.json）" "appsettings.json"
@@ -1014,7 +1033,6 @@ do_install() {
     local USE_PROXY
     prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
 
-    local proxy_configured=0
     if [[ "$USE_PROXY" == "yes" ]]; then
       local PROXY_IP PROXY_PORT
       prompt PROXY_IP "请输入代理服务器 IP 地址" ""
@@ -1026,27 +1044,42 @@ do_install() {
         warn "代理配置失败，将不使用代理继续安装。"
       fi
     fi
-
   else
     die "角色选择错误，只能输入 1 或 2。"
   fi
 
   echo
-  info "启动 openppp2..."
+  info "预拉取镜像..."
   cd "$APP_DIR"
+  compose pull || true
+
+  if [[ "$ROLE" == "2" ]]; then
+    cleanup_docker_proxy_after_pull "$proxy_configured"
+    if [[ "$proxy_configured" -eq 1 ]]; then
+      proxy_cleanup_deferred=1
+      info "已完成镜像拉取，Docker 代理将在本次安装结束后保留为未生效状态（配置文件已删，未重启 daemon）。"
+    fi
+  fi
+
+  echo
+  info "启动 openppp2..."
   compose up -d --remove-orphans
 
   if [[ "$ROLE" == "2" ]]; then
-    if [[ "${proxy_configured:-0}" -eq 1 ]]; then
-      remove_docker_proxy
-    fi
-
     health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
   else
     health_check_one "openppp2"
   fi
 
   setup_systemd_weekly_update
+
+  if [[ "$ROLE" == "2" && "$proxy_cleanup_deferred" -eq 1 ]]; then
+    echo
+    warn "注意：Docker 代理配置文件已删除，但当前 Docker daemon 尚未重启。"
+    warn "这样做是为了避免刚启动的 openppp2 容器被 Docker 重启顺手停掉。"
+    warn "如果你后续确实要让 Docker 立即丢弃旧代理，请手动执行：systemctl restart docker"
+    warn "执行后 openppp2 会因 restart: unless-stopped 自动拉起。"
+  fi
 
   echo
   echo "===== 完成 ====="
@@ -1222,6 +1255,7 @@ do_add_client() {
   prompt USE_PROXY "是否需要为 Docker 配置 HTTP 代理来拉取镜像？（yes/no）" "no"
 
   local proxy_configured=0
+  local proxy_cleanup_deferred=0
   if [[ "$USE_PROXY" == "yes" ]]; then
     local PROXY_IP PROXY_PORT
     prompt PROXY_IP "请输入代理服务器 IP 地址" ""
@@ -1234,14 +1268,27 @@ do_add_client() {
     fi
   fi
 
+  info "预拉取镜像..."
+  compose pull "${SVC_NAME}" || compose pull || true
+
+  cleanup_docker_proxy_after_pull "$proxy_configured"
+  if [[ "$proxy_configured" -eq 1 ]]; then
+    proxy_cleanup_deferred=1
+    info "已完成镜像拉取，Docker 代理将在本次新增结束后保留为未生效状态（配置文件已删，未重启 daemon）。"
+  fi
+
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
 
-  if [[ "$proxy_configured" -eq 1 ]]; then
-    remove_docker_proxy
-  fi
-
   health_check_one "${SVC_NAME}"
+
+  if [[ "$proxy_cleanup_deferred" -eq 1 ]]; then
+    echo
+    warn "注意：Docker 代理配置文件已删除，但当前 Docker daemon 尚未重启。"
+    warn "这样做是为了避免刚启动的 ${SVC_NAME} 容器被 Docker 重启顺手停掉。"
+    warn "如果你后续确实要让 Docker 立即丢弃旧代理，请手动执行：systemctl restart docker"
+    warn "执行后 ${SVC_NAME} 会因 restart: unless-stopped 自动拉起。"
+  fi
 
   echo
   echo "当前新增客户端配置信息："
