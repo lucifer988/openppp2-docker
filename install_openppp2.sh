@@ -631,6 +631,9 @@ services:
 $(compose_restart_policy_block)
 $(compose_security_opt_block)
 $(compose_logging_block)
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     volumes:
       - ./${cfg}:/opt/openppp2/appsettings.json:ro
     ports:
