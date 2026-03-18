@@ -1126,6 +1126,24 @@ do_backup() {
   echo "备份完成。"
 }
 
+do_restore() {
+  if [[ ! -d "$BACKUP_DIR" ]]; then
+    die "未找到备份目录：${BACKUP_DIR}"
+  fi
+
+  local latest
+  latest="$(ls -t ${BACKUP_DIR}/*.bak.* 2>/dev/null | head -1 || true)"
+  if [[ -z "$latest" ]]; then
+    die "未找到备份文件。"
+  fi
+
+  info "恢复最新备份：$latest"
+  local target
+  target="${latest%.bak.*}"
+  cp -a "$latest" "$target"
+  echo "已恢复到：$target"
+}
+
 do_uninstall() {
   info "开始卸载 openppp2（不卸载 Docker）..."
 
@@ -1578,10 +1596,11 @@ main() {
   echo "  4) 查看客户端配置和代理信息"
   echo "  5) 删除客户端实例/配置（避免重启反复拉起）"
   echo "  6) 备份当前配置文件"
+  echo "  7) 回滚（恢复最新备份）"
   echo "=============================="
 
   local ACTION
-  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5 / 6）" "1"
+  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5 / 6 / 7）" "1"
 
   case "$ACTION" in
     1) do_install ;;
@@ -1590,7 +1609,8 @@ main() {
     4) do_show_info ;;
     5) do_delete_client ;;
     6) do_backup ;;
-    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5 / 6。" ;;
+    7) do_restore ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5 / 6 / 7。" ;;
   esac
 }
 
