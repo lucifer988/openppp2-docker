@@ -1137,11 +1137,28 @@ do_restore() {
     die "未找到备份文件。"
   fi
 
-  info "恢复最新备份：$latest"
-  local target
-  target="${latest%.bak.*}"
-  cp -a "$latest" "$target"
-  echo "已恢复到：$target"
+  local ts
+  ts="${latest##*.bak.}"
+  if [[ -z "$ts" ]]; then
+    die "无法解析备份时间戳。"
+  fi
+
+  info "恢复时间戳 ${ts} 的全部备份文件..."
+  local count=0
+  for f in "${BACKUP_DIR}"/*.bak."${ts}"; do
+    [[ -f "$f" ]] || continue
+    local target
+    target="${f%.bak.*}"
+    cp -a "$f" "$target"
+    echo "已恢复：$target"
+    count=$((count + 1))
+  done
+
+  if [[ "$count" -eq 0 ]]; then
+    die "未找到时间戳为 ${ts} 的备份文件。"
+  fi
+
+  echo "恢复完成（共 ${count} 个文件）。"
 }
 
 do_uninstall() {
