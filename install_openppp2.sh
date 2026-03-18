@@ -11,6 +11,8 @@ DEFAULT_ONCAL="Sun *-*-* 03:00:00"
 
 DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
+BACKUP_DIR="${APP_DIR}/backups"
+
 COMPOSE_KIND=""
 APT_PROXY_PROMPTED=0
 
@@ -523,6 +525,21 @@ SECCOMPEOF
   info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
 }
 
+ensure_backup_dir() {
+  mkdir -p "$BACKUP_DIR"
+}
+
+backup_if_exists() {
+  local file="$1"
+  if [[ -f "$file" ]]; then
+    ensure_backup_dir
+    local base="$(basename "$file")"
+    local backup="${BACKUP_DIR}/${base}.bak.$(date +%Y%m%d_%H%M%S)"
+    cp -a "$file" "$backup"
+    info "备份: ${backup}"
+  fi
+}
+
 setup_docker_proxy() {
   local proxy_ip="$1"
   local proxy_port="$2"
@@ -932,6 +949,10 @@ do_install() {
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的服务端配置文件名称（例如 appsettings.json）" "appsettings.json"
 
+    backup_if_exists "${APP_DIR}/${APP_CFG_NAME}"
+    backup_if_exists "$COMPOSE_FILE"
+    backup_if_exists "$SECCOMP_FILE"
+
     local SERVER_PUBLIC_IP autoip=""
     autoip="$(curl_retry -sS https://api.ipify.org 2>/dev/null || true)"
     if [[ -n "$autoip" ]]; then
@@ -952,6 +973,10 @@ do_install() {
 
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings-RFCHK.json）" "appsettings.json"
+
+    backup_if_exists "${APP_DIR}/${APP_CFG_NAME}"
+    backup_if_exists "$COMPOSE_FILE"
+    backup_if_exists "$SECCOMP_FILE"
 
     local MAIN_SERVICE_NAME
     prompt MAIN_SERVICE_NAME "请输入主客户端实例名称（容器/服务名）" "openppp2"
@@ -1122,8 +1147,27 @@ do_uninstall() {
     fi
   fi
 
-  info "删除目录 ${APP_DIR} ..."
-  rm -rf "$APP_DIR"
+  local KEEP_BACKUP
+  prompt KEEP_BACKUP "是否保留备份文件（backups 目录）？(yes/no)" "yes"
+
+  if [[ "$KEEP_BACKUP" == "yes" ]]; then
+    local tmp_backup=""
+    if [[ -d "$BACKUP_DIR" ]]; then
+      tmp_backup="/tmp/openppp2-backups-$(date +%Y%m%d_%H%M%S)"
+      mv "$BACKUP_DIR" "$tmp_backup" >/dev/null 2>&1 || true
+    fi
+
+    info "删除目录 ${APP_DIR} ..."
+    rm -rf "$APP_DIR"
+
+    if [[ -n "$tmp_backup" && -d "$tmp_backup" ]]; then
+      mkdir -p "$APP_DIR"
+      mv "$tmp_backup" "$BACKUP_DIR" >/dev/null 2>&1 || true
+    fi
+  else
+    info "删除目录 ${APP_DIR} ..."
+    rm -rf "$APP_DIR"
+  fi
 
   rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
   sysctl --system >/dev/null 2>&1 || true
