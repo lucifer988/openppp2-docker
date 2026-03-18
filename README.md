@@ -80,7 +80,7 @@ CLIENT_NIC=ens192 OPENPPP2_BOOT_DELAY=20 sudo ./install_openppp2.sh
 
 ## 备份与回滚
 
-安装脚本现在会在写入以下文件前自动备份到 `/opt/openppp2/backups`：
+可在交互菜单中选择 **6) 备份当前配置文件**，手动备份到 `/opt/openppp2/backups`：
 
 - `appsettings*.json`
 - `docker-compose.yml`
@@ -116,6 +116,7 @@ sudo ./install_openppp2.sh
 - 3) 新增 openppp2 客户端实例
 - 4) 查看客户端配置和代理信息
 - 5) 删除客户端实例/配置
+- 6) 备份当前配置文件
 
 常用独立命令：
 

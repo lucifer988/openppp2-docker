@@ -525,21 +525,6 @@ SECCOMPEOF
   info "seccomp 配置文件已生成（仅放开 io_uring 相关系统调用，保留其他安全限制）"
 }
 
-ensure_backup_dir() {
-  mkdir -p "$BACKUP_DIR"
-}
-
-backup_if_exists() {
-  local file="$1"
-  if [[ -f "$file" ]]; then
-    ensure_backup_dir
-    local base="$(basename "$file")"
-    local backup="${BACKUP_DIR}/${base}.bak.$(date +%Y%m%d_%H%M%S)"
-    cp -a "$file" "$backup"
-    info "备份: ${backup}"
-  fi
-}
-
 setup_docker_proxy() {
   local proxy_ip="$1"
   local proxy_port="$2"
@@ -949,9 +934,6 @@ do_install() {
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的服务端配置文件名称（例如 appsettings.json）" "appsettings.json"
 
-    backup_if_exists "${APP_DIR}/${APP_CFG_NAME}"
-    backup_if_exists "$COMPOSE_FILE"
-    backup_if_exists "$SECCOMP_FILE"
 
     local SERVER_PUBLIC_IP autoip=""
     autoip="$(curl_retry -sS https://api.ipify.org 2>/dev/null || true)"
@@ -974,9 +956,6 @@ do_install() {
     local APP_CFG_NAME
     prompt APP_CFG_NAME "请输入要生成的客户端配置文件名称（例如 appsettings-RFCHK.json）" "appsettings.json"
 
-    backup_if_exists "${APP_DIR}/${APP_CFG_NAME}"
-    backup_if_exists "$COMPOSE_FILE"
-    backup_if_exists "$SECCOMP_FILE"
 
     local MAIN_SERVICE_NAME
     prompt MAIN_SERVICE_NAME "请输入主客户端实例名称（容器/服务名）" "openppp2"
@@ -1113,6 +1092,38 @@ do_install() {
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
   echo
   info "安全配置：使用自定义 seccomp 配置（仅放开必要的 io_uring 系统调用）"
+}
+
+do_backup() {
+  if [[ ! -d "$APP_DIR" ]]; then
+    die "未检测到 ${APP_DIR}，请先安装再备份。"
+  fi
+
+  mkdir -p "$BACKUP_DIR"
+
+  local ts
+  ts="$(date +%Y%m%d_%H%M%S)"
+
+  if [[ -f "$COMPOSE_FILE" ]]; then
+    cp -a "$COMPOSE_FILE" "$BACKUP_DIR/docker-compose.yml.bak.${ts}"
+    info "已备份: $BACKUP_DIR/docker-compose.yml.bak.${ts}"
+  fi
+
+  if [[ -f "$SECCOMP_FILE" ]]; then
+    cp -a "$SECCOMP_FILE" "$BACKUP_DIR/seccomp-openppp2.json.bak.${ts}"
+    info "已备份: $BACKUP_DIR/seccomp-openppp2.json.bak.${ts}"
+  fi
+
+  for cfg in "$APP_DIR"/appsettings*.json; do
+    if [[ -f "$cfg" ]]; then
+      local base
+      base="$(basename "$cfg")"
+      cp -a "$cfg" "$BACKUP_DIR/${base}.bak.${ts}"
+      info "已备份: $BACKUP_DIR/${base}.bak.${ts}"
+    fi
+  done
+
+  echo "备份完成。"
 }
 
 do_uninstall() {
@@ -1566,10 +1577,11 @@ main() {
   echo "  3) 新增 openppp2 客户端实例"
   echo "  4) 查看客户端配置和代理信息"
   echo "  5) 删除客户端实例/配置（避免重启反复拉起）"
+  echo "  6) 备份当前配置文件"
   echo "=============================="
 
   local ACTION
-  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5）" "1"
+  prompt ACTION "请输入数字选择（1 / 2 / 3 / 4 / 5 / 6）" "1"
 
   case "$ACTION" in
     1) do_install ;;
@@ -1577,7 +1589,8 @@ main() {
     3) do_add_client ;;
     4) do_show_info ;;
     5) do_delete_client ;;
-    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5。" ;;
+    6) do_backup ;;
+    *) die "输入错误，只能是 1 / 2 / 3 / 4 / 5 / 6。" ;;
   esac
 }
 
