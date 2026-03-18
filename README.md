@@ -78,9 +78,6 @@ CLIENT_NIC=ens192 OPENPPP2_BOOT_DELAY=20 sudo ./install_openppp2.sh
 
 更新/重启时可通过 compose 一键处理所有实例。
 
-## 回滚
-
-
 ## 备份与回滚
 
 安装脚本现在会在写入以下文件前自动备份到 `/opt/openppp2/backups`：
@@ -102,15 +99,39 @@ CLIENT_NIC=ens192 OPENPPP2_BOOT_DELAY=20 sudo ./install_openppp2.sh
 ```bash
 /opt/openppp2/rollback.sh restore
 ```
-查看备份：
+
+
+## 功能与命令一览
+
+主入口：
+
+```bash
+sudo ./install_openppp2.sh
+```
+
+交互菜单：
+
+- 1) 安装 openppp2
+- 2) 卸载 openppp2
+- 3) 新增 openppp2 客户端实例
+- 4) 查看客户端配置和代理信息
+- 5) 删除客户端实例/配置
+
+常用独立命令：
+
+- 定时更新（systemd timer 由安装脚本生成）：`/usr/local/bin/openppp2-update.sh`
+- 手动更新：
+
+```bash
+cd /opt/openppp2
+docker compose pull
+docker compose up -d --remove-orphans
+```
+
+- 回滚：
 
 ```bash
 /opt/openppp2/rollback.sh list
-```
-
-恢复最新备份：
-
-```bash
 /opt/openppp2/rollback.sh restore
 ```
 
