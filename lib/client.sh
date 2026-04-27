@@ -73,6 +73,10 @@ do_add_client() {
     info "检测到默认网关：${gw}"
   fi
 
+  if [[ -z "${gw:-}" ]]; then
+    die "网关地址不能为空。客户端必须指定网关才能正确路由流量。"
+  fi
+
   local SERVER_URI="ppp://${SERVER_IP}:${SERVER_PORT}/"
 
   local idx=2
@@ -155,7 +159,7 @@ do_add_client() {
   info "启动新增客户端实例：${SVC_NAME} ..."
   compose up -d --remove-orphans "${SVC_NAME}"
 
-  health_check_one "${SVC_NAME}"
+  health_check_one "${SVC_NAME}" || warn "健康检查未通过，请手动检查容器状态"
 
   if [[ "$proxy_cleanup_deferred" -eq 1 ]]; then
     echo

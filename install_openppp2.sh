@@ -55,13 +55,17 @@ do_install() {
     local SERVER_PUBLIC_IP autoip=""
     autoip="$(curl_retry -sS https://api.ipify.org 2>/dev/null || true)"
     if [[ -n "$autoip" ]]; then
-      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" "$autoip"
+      prompt SERVER_PUBLIC_IP "请输入服务端对外（公网）IP 地址" "$autoip"
     else
-      prompt SERVER_PUBLIC_IP "请输入服务端对外 IP 地址" ""
+      prompt SERVER_PUBLIC_IP "请输入服务端对外（公网）IP 地址" ""
     fi
 
+    local SERVER_BIND_IP
+    prompt SERVER_BIND_IP "请输入服务端监听（bind）IP 地址（NAT/云主机通常填内网 IP，直连填公网 IP）" "${SERVER_PUBLIC_IP}"
+
     jq --arg ip "$SERVER_PUBLIC_IP" \
-       '.ip.public=$ip | .ip.interface=$ip' \
+       --arg bind "$SERVER_BIND_IP" \
+       '.ip.public=$ip | .ip.interface=$bind' \
        appsettings.base.json > "$APP_CFG_NAME"
 
     write_compose_server "$IMAGE" "$APP_CFG_NAME"
@@ -107,6 +111,10 @@ do_install() {
       prompt gw "请输入默认网关（例如 192.168.1.1）" ""
     else
       info "检测到默认网关：${gw}"
+    fi
+
+    if [[ -z "${gw:-}" ]]; then
+      die "网关地址不能为空。客户端必须指定网关才能正确路由流量。"
     fi
 
     local SERVER_URI="ppp://${SERVER_IP}:${SERVER_PORT}/"
@@ -188,9 +196,9 @@ do_install() {
   compose up -d --remove-orphans
 
   if [[ "$ROLE" == "2" ]]; then
-    health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
+    health_check_one "$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)" || warn "健康检查未通过，请手动检查容器状态"
   else
-    health_check_one "openppp2"
+    health_check_one "openppp2" || warn "健康检查未通过，请手动检查容器状态"
   fi
 
   setup_systemd_weekly_update
@@ -245,10 +253,8 @@ do_uninstall() {
     cd "$APP_DIR"
     detect_compose >/dev/null 2>&1 || true
     if [[ -n "$COMPOSE_KIND" ]]; then
-      info "停止并删除容器..."
+      info "停止并清理 compose 资源..."
       compose down --remove-orphans >/dev/null 2>&1 || true
-    else
-      docker rm -f openppp2 >/dev/null 2>&1 || true
     fi
   fi
 

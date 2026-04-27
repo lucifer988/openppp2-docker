@@ -59,6 +59,12 @@ do_restore() {
   fi
 
   info "恢复时间戳 ${ts} 的全部备份文件..."
+
+  # 检查关键备份文件是否存在
+  if ! ls "${BACKUP_DIR}"/docker-compose.yml.bak."${ts}" >/dev/null 2>&1; then
+    die "时间戳 ${ts} 的备份不完整：缺少 docker-compose.yml，无法安全恢复。"
+  fi
+
   local count=0
   for f in "${BACKUP_DIR}"/*.bak."${ts}"; do
     [[ -f "$f" ]] || continue

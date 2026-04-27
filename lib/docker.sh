@@ -218,17 +218,20 @@ cleanup_docker_proxy_after_pull() {
 # === health_check_one ===
 health_check_one() {
   local svc="$1"
+  local ok=0
   if ! docker ps --format '{{.Names}}' | grep -qx "$svc"; then
     warn "容器未运行：${svc}"
     echo "  查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs --tail=200 ${svc}" >&2
-    exit 1
+    ok=1
   fi
 
   if docker logs "$svc" 2>/dev/null | tail -n 200 | grep -q 'io_uring_queue_init: Operation not permitted'; then
     warn "检测到 io_uring 被拒绝（Operation not permitted）。"
     warn "请检查 seccomp 配置文件是否正确加载。"
     echo "  查看日志：docker logs --tail=200 ${svc}" >&2
-    exit 1
+    ok=1
   fi
+
+  return $ok
 }
 
