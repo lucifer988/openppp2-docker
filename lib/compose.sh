@@ -6,12 +6,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ -f "${SCRIPT_DIR}/config.sh" ]] && source "${SCRIPT_DIR}/config.sh"
 
-# === compose_header ===
-compose_header() {
-  :  # Docker Compose V2 不再需要 version 字段
-}
-
-
 # === compose_restart_policy_block ===
 compose_restart_policy_block() {
   if [[ "${STRICT_BOOT_DELAY_MODE}" == "yes" ]]; then
@@ -49,7 +43,7 @@ LOGEOF
 # === write_compose_server ===
 write_compose_server() {
   local image="$1" cfg="$2"
-  compose_header > "$COMPOSE_FILE"
+  > "$COMPOSE_FILE"
   cat >> "$COMPOSE_FILE" <<SERVEREOF
 services:
   openppp2:
@@ -71,7 +65,7 @@ SERVEREOF
 # === write_compose_client ===
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8" use_mux="${9:-no}"
-  compose_header > "$COMPOSE_FILE"
+  > "$COMPOSE_FILE"
   cat >> "$COMPOSE_FILE" <<CLIENTEOF
 services:
   ${svc}:
@@ -85,6 +79,7 @@ $(compose_logging_block)
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     volumes:
       - ./${cfg}:/opt/openppp2/${cfg}:ro
       - ./ip.txt:/opt/openppp2/ip.txt:ro
@@ -134,6 +129,7 @@ $(compose_logging_block)
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     volumes:
       - ./${cfg}:/opt/openppp2/${cfg}:ro
       - ./${ipfile}:/opt/openppp2/ip.txt:ro

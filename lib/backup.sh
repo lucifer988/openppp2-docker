@@ -64,6 +64,10 @@ do_restore() {
     [[ -f "$f" ]] || continue
     local target
     target="${f%.bak.*}"
+    if [[ ! -s "$f" ]]; then
+      warn "备份文件为空，跳过：$f"
+      continue
+    fi
     cp -a "$f" "$target"
     echo "已恢复：$target"
     count=$((count + 1))

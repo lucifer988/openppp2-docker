@@ -17,7 +17,7 @@ is_port_in_use() {
 random_free_port() {
   local p tries=0
   while :; do
-    p=$(( RANDOM % 50001 + 10000 ))
+    p="$(shuf -i 10000-60000 -n 1)"
     if ! is_port_in_use "$p"; then
       echo "$p"
       return 0

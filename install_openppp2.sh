@@ -44,8 +44,6 @@ do_install() {
 
   generate_seccomp_profile "$SECCOMP_FILE"
 
-  docker rm -f watchtower >/dev/null 2>&1 || true
-
   local proxy_configured=0
   local proxy_cleanup_deferred=0
 
@@ -232,7 +230,15 @@ do_uninstall() {
   fi
 
   if need_cmd docker; then
-    docker rm -f watchtower >/dev/null 2>&1 || true
+    # 清理所有 openppp2 容器（包括多实例）
+    local containers
+    containers="$(docker ps -a --filter name=openppp2 --format '{{.Names}}' 2>/dev/null || true)"
+    if [[ -n "$containers" ]]; then
+      info "停止并删除 openppp2 容器..."
+      for c in $containers; do
+        docker rm -f "$c" >/dev/null 2>&1 || true
+      done
+    fi
   fi
 
   if [[ -d "$APP_DIR" ]] && need_cmd docker; then
@@ -254,6 +260,16 @@ do_uninstall() {
     if [[ -d "$BACKUP_DIR" ]]; then
       tmp_backup="/tmp/openppp2-backups-$(date +%Y%m%d_%H%M%S)"
       mv "$BACKUP_DIR" "$tmp_backup" >/dev/null 2>&1 || true
+    fi
+
+    # 二次确认没有 openppp2 容器在运行
+    if need_cmd docker; then
+      local running
+      running="$(docker ps --filter name=openppp2 --format '{{.Names}}' 2>/dev/null || true)"
+      if [[ -n "$running" ]]; then
+        warn "以下容器仍在运行，请手动停止后再卸载：$running"
+        die "卸载中止：仍有运行中的 openppp2 容器。"
+      fi
     fi
 
     info "删除目录 ${APP_DIR} ..."
