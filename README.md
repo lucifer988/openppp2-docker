@@ -36,8 +36,6 @@ Deploy openppp2 in Docker with one command. Supports server/client modes, multip
 openppp2-docker/
 ├── install_openppp2.sh          # 主入口 — 菜单路由 + 安装/卸载编排层
 ├── config.sh                     # 集中配置：路径、镜像、默认值
-├── utils.sh                      # 通用工具：日志、Docker 检查、备份恢复
-├── rollback.sh                   # 独立回滚脚本（可脱离主脚本使用）
 ├── appsettings.base.json         # 基准配置模板（首次安装时据此生成实例配置）
 ├── Dockerfile                    # 镜像构建文件（CI 自动拉取上游 release 构建）
 ├── .github/workflows/build.yml   # CI：每周日自动追踪上游 release 构建并推送 GHCR
@@ -140,12 +138,16 @@ Compose 一键管理所有实例。
 
 ### 回滚
 
+在交互菜单选择 **7) 回滚（恢复最新备份）**，自动从最新备份恢复全部配置文件。
+
+也可以从命令行手动操作：
+
 ```bash
 # 查看可用备份
-/opt/openppp2/rollback.sh list
+ls -lt /opt/openppp2/backups/
 
-# 恢复最新备份
-/opt/openppp2/rollback.sh restore
+# 手动恢复（指定备份时间戳目录下的文件）
+cp /opt/openppp2/backups/docker-compose.yml.bak.* /opt/openppp2/docker-compose.yml
 ```
 
 ---
@@ -231,8 +233,8 @@ shellcheck install_openppp2.sh lib/*.sh
 
 ## 日志
 
-- 安装日志：`/opt/openppp2/install.log`
 - openppp2 日志：`docker compose logs -f <service>` 或容器内日志文件
+- 安装过程中所有状态信息会输出到终端
 
 ---
 

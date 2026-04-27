@@ -8,7 +8,6 @@ APP_DIR="/opt/openppp2"
 COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
 SECCOMP_FILE="${APP_DIR}/seccomp-openppp2.json"
 BACKUP_DIR="${APP_DIR}/backups"
-LOG_FILE="${APP_DIR}/install.log"
 
 # Docker 镜像
 DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
@@ -27,9 +26,6 @@ DEFAULT_BOOT_DELAY="${DEFAULT_BOOT_DELAY:-20}"
 
 # 严格开机延迟模式
 STRICT_BOOT_DELAY_MODE="${STRICT_BOOT_DELAY_MODE:-no}"
-
-# Docker 安全选项
-DEFAULT_SECURITY_OPT_APPARMOR="apparmor=unconfined"
 
 # 运行时状态
 COMPOSE_KIND=""

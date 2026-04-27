@@ -8,9 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # === compose_header ===
 compose_header() {
-  if [[ "$COMPOSE_KIND" == "docker-compose" ]]; then
-    echo 'version: "3.8"'
-  fi
+  :  # Docker Compose V2 不再需要 version 字段
 }
 
 
