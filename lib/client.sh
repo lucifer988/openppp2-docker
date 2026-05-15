@@ -22,7 +22,7 @@ do_add_client() {
     die "当前安装不是 client（可能是 server），按要求禁止使用 3) 新增。"
   fi
 
-  cd "$APP_DIR"
+  cd "$APP_DIR" || die "无法切换到目录 $APP_DIR"
 
   if [[ ! -f "$SECCOMP_FILE" ]]; then
     info "未找到 seccomp 配置文件，正在生成..."
@@ -184,7 +184,7 @@ do_add_client() {
 # === do_show_info ===
 do_show_info() {
   [[ -d "$APP_DIR" ]] || die "未检测到 ${APP_DIR} 目录，似乎尚未安装 openppp2。"
-  cd "$APP_DIR"
+  cd "$APP_DIR" || die "无法切换到目录 $APP_DIR"
 
   local found=0
   for f in appsettings*.json; do
@@ -221,7 +221,7 @@ CLIENT_CFG_LIST=()
 
 # === list_client_cfgs ===
 list_client_cfgs() {
-  cd "$APP_DIR"
+  cd "$APP_DIR" || die "无法切换到目录 $APP_DIR"
   CLIENT_CFG_LIST=()
   local f
   for f in appsettings*.json; do
@@ -330,7 +330,7 @@ do_delete_client() {
     die "当前环境不是 client（或未按脚本安装），为安全起见不提供删除。"
   fi
 
-  cd "$APP_DIR"
+  cd "$APP_DIR" || die "无法切换到目录 $APP_DIR"
 
   if ! list_client_cfgs; then
     echo "未找到可删除的客户端配置文件。"

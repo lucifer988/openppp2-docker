@@ -1,6 +1,6 @@
 # openppp2-docker
 
-> **v2.0 模块化重构** — 主脚本从 1634 行精简至 314 行（−81%），50+ 功能函数按职责拆分至 `lib/` 目录，每个模块职责单一、可独立维护和测试。
+> **v2.1 优化版** — 修复所有 ShellCheck 警告，优化 CI/CD 逻辑，多阶段构建减少镜像体积，增强文档完整性。
 
 一键安装/更新 openppp2 的 Docker 化部署脚本。支持 Server / Client 双模式、同机多实例、自动更新与配置回滚。
 
@@ -17,6 +17,7 @@ Deploy openppp2 in Docker with one command. Supports server/client modes, multip
 - 🛡️ **失败回滚**：配置文件自动备份，出问题一键恢复
 - 🔒 **Seccomp 安全策略**：自定义 seccomp profile，仅放开 io_uring 等必要系统调用
 - 🌐 **网络自适应**：自动探测网卡、IP、网关，支持 Docker 代理加速镜像拉取
+- ✅ **代码质量**：通过 ShellCheck 静态分析，遵循 Shell 最佳实践
 
 ---
 
@@ -35,9 +36,9 @@ Deploy openppp2 in Docker with one command. Supports server/client modes, multip
 ```
 openppp2-docker/
 ├── install_openppp2.sh          # 主入口 — 菜单路由 + 安装/卸载编排层
-├── config.sh                     # 集中配置：路径、镜像、默认值
+├── config.sh                     # 集中配置：路径、镜像、默认值、版本号
 ├── appsettings.base.json         # 基准配置模板（首次安装时据此生成实例配置）
-├── Dockerfile                    # 镜像构建文件（CI 自动拉取上游 release 构建）
+├── Dockerfile                    # 多阶段构建镜像文件（CI 自动拉取上游 release 构建）
 ├── .github/workflows/build.yml   # CI：每周日自动追踪上游 release 构建并推送 GHCR
 └── lib/                          # 模块化函数库（按依赖顺序加载）
     ├── core.sh                   # 核心工具：日志、交互提示、依赖安装、基础检查
@@ -54,26 +55,45 @@ openppp2-docker/
 
 ## 快速开始
 
-### 1. 下载安装脚本
+### 完整部署示例
+
+#### 服务端部署
 
 ```bash
+# 1. 下载脚本
 curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o install_openppp2.sh
 chmod +x install_openppp2.sh
+
+# 2. 运行安装（选择 1 - 服务端）
+sudo ./install_openppp2.sh
+# 输入公网 IP: 1.2.3.4
+# 输入监听 IP: 1.2.3.4（或内网 IP）
+
+# 3. 验证运行
+docker compose -f /opt/openppp2/docker-compose.yml ps
+docker compose -f /opt/openppp2/docker-compose.yml logs -f
 ```
 
-### 2. 运行安装
+#### 客户端部署
 
 ```bash
+# 1. 下载脚本（同上）
+curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o install_openppp2.sh
+chmod +x install_openppp2.sh
+
+# 2. 运行安装（选择 2 - 客户端）
 sudo ./install_openppp2.sh
+# 输入服务端 IP: 1.2.3.4
+# 输入服务端端口: 20000
+
+# 3. 验证运行
+docker compose -f /opt/openppp2/docker-compose.yml ps
+# 测试代理
+curl -x http://127.0.0.1:8080 https://ifconfig.me
+curl -x socks5://127.0.0.1:1080 https://ifconfig.me
 ```
 
-脚本交互式引导：
-- 选择角色（Server / Client）
-- 输入服务端 IP / 端口
-- 自动探测网卡和 IP（或手动指定）
-- 可选：Docker 代理加速、Mux 多路复用
-
-### 3. 日常更新
+### 日常更新
 
 ```bash
 cd /opt/openppp2
@@ -152,6 +172,126 @@ cp /opt/openppp2/backups/docker-compose.yml.bak.* /opt/openppp2/docker-compose.y
 
 ---
 
+## 网络拓扑
+
+```
+┌─────────────────┐         ┌─────────────────┐
+│   Client Host   │         │   Server Host   │
+│                 │         │                 │
+│  ┌───────────┐  │         │  ┌───────────┐  │
+│  │ openppp2  │  │  UDP    │  │ openppp2  │  │
+│  │ container │◄─┼────────►│  │ container │  │
+│  │           │  │  20000  │  │           │  │
+│  └─────┬─────┘  │         │  └───────────┘  │
+│        │ TUN    │         │                 │
+│   ┌────▼─────┐  │         │                 │
+│   │   ppp0   │  │         │                 │
+│   │10.0.0.2  │  │         │                 │
+│   └──────────┘  │         │                 │
+│                 │         │                 │
+│  HTTP: 8080     │         │                 │
+│  SOCKS5: 1080   │         │                 │
+└─────────────────┘         └─────────────────┘
+```
+
+---
+
+## 故障排查
+
+### 容器无法启动
+
+```bash
+# 查看日志
+docker compose -f /opt/openppp2/docker-compose.yml logs
+
+# 检查配置文件
+cat /opt/openppp2/appsettings.json | jq .
+
+# 检查容器状态
+docker compose -f /opt/openppp2/docker-compose.yml ps -a
+```
+
+### 客户端无法连接服务端
+
+```bash
+# 测试网络连通性（TCP）
+nc -zv <服务端IP> 20000
+
+# 测试 UDP（需要 nc 支持 UDP）
+nc -zuv <服务端IP> 20000
+
+# 检查防火墙
+sudo ufw status
+sudo iptables -L -n | grep 20000
+
+# 服务端检查端口监听
+sudo netstat -tulnp | grep 20000
+```
+
+### TUN 设备问题
+
+```bash
+# 检查 TUN 支持
+ls -l /dev/net/tun
+
+# 检查内核模块
+lsmod | grep tun
+
+# 手动加载 TUN 模块
+sudo modprobe tun
+
+# 检查容器内 TUN 设备
+docker exec <container_name> ip link show
+```
+
+### io_uring 权限错误
+
+```bash
+# 检查 seccomp profile 是否存在
+ls -l /opt/openppp2/seccomp-openppp2.json
+
+# 检查 compose 文件是否引用了 seccomp
+grep seccomp /opt/openppp2/docker-compose.yml
+
+# 重新生成 seccomp profile
+cd /opt/openppp2
+sudo ./install_openppp2.sh
+# 选择菜单项 6 备份，然后重新安装
+```
+
+### 端口冲突
+
+```bash
+# 检查端口占用
+sudo netstat -tulnp | grep <端口号>
+sudo lsof -i :<端口号>
+
+# 修改配置文件中的端口
+vim /opt/openppp2/appsettings.json
+# 修改 http-proxy.port 和 socks-proxy.port
+
+# 重启容器
+docker compose -f /opt/openppp2/docker-compose.yml restart
+```
+
+### 日志查看
+
+```bash
+# 实时查看所有容器日志
+docker compose -f /opt/openppp2/docker-compose.yml logs -f
+
+# 查看特定容器日志
+docker compose -f /opt/openppp2/docker-compose.yml logs -f openppp2
+
+# 查看最近 100 行日志
+docker compose -f /opt/openppp2/docker-compose.yml logs --tail=100
+
+# 容器内日志文件（如果配置了）
+docker exec <container_name> cat /opt/openppp2/ppp.log
+```
+
+---
+
 ## 常见问题
 
 <details>
@@ -163,13 +303,23 @@ cp /opt/openppp2/backups/docker-compose.yml.bak.* /opt/openppp2/docker-compose.y
 <details>
 <summary><b>端口冲突？</b></summary>
 
-脚本自动检测端口占用，从 10000-60000 范围随机选择空闲端口分配。
+脚本自动检测端口占用，从 10000-60000 范围随机选择空闲端口分配。如果仍有冲突，手动编辑 `appsettings.json` 修改端口。
 </details>
 
 <details>
 <summary><b>Docker 镜像拉取慢？</b></summary>
 
-安装过程中支持临时配置 Docker HTTP 代理。安装完成后代理自动移除。
+安装过程中支持临时配置 Docker HTTP 代理。安装完成后代理自动移除。也可以配置 Docker 镜像加速器：
+
+```bash
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json <<EOF
+{
+  "registry-mirrors": ["https://mirror.gcr.io"]
+}
+EOF
+sudo systemctl restart docker
+```
 </details>
 
 <details>
@@ -177,6 +327,35 @@ cp /opt/openppp2/backups/docker-compose.yml.bak.* /opt/openppp2/docker-compose.y
 
 脚本自动生成自定义 seccomp profile 放开 io_uring 相关系统调用。如果容器未加载该 profile，
 检查 `docker-compose.yml` 中 `security_opt: seccomp=./seccomp-openppp2.json` 是否存在。
+</details>
+
+<details>
+<summary><b>配置文件中的密钥安全吗？</b></summary>
+
+`appsettings.base.json` 中的密钥是示例值，**必须修改**。建议：
+- 使用强随机密钥（可用 `openssl rand -base64 16` 生成）
+- 修改 `protocol-key` 和 `transport-key`
+- 修改 SOCKS5 的 `username` 和 `password`
+- 不要在公开仓库中提交真实密钥
+</details>
+
+<details>
+<summary><b>如何监控服务状态？</b></summary>
+
+可以使用简单的健康检查脚本：
+
+```bash
+#!/bin/bash
+# /opt/openppp2/check_health.sh
+curl -s http://localhost:8080 >/dev/null && echo "HTTP proxy: OK" || echo "HTTP proxy: FAIL"
+curl -s --socks5 localhost:1080 https://ifconfig.me >/dev/null && echo "SOCKS5 proxy: OK" || echo "SOCKS5 proxy: FAIL"
+docker compose -f /opt/openppp2/docker-compose.yml ps | grep -q "Up" && echo "Container: OK" || echo "Container: FAIL"
+```
+
+配合 cron 定期检查：
+```bash
+*/5 * * * * /opt/openppp2/check_health.sh >> /var/log/openppp2-health.log 2>&1
+```
 </details>
 
 ---
@@ -191,10 +370,26 @@ config.sh → core.sh → network.sh → seccomp.sh → docker.sh → compose.sh
 
 加载顺序至关重要：后续模块依赖前面模块定义的函数。如需新增模块，插入到正确位置并在 `install_openppp2.sh` 中添加 `source`。
 
-### 快速 lint
+### 代码质量检查
 
 ```bash
+# ShellCheck 静态分析
 shellcheck install_openppp2.sh lib/*.sh
+
+# 语法检查
+bash -n install_openppp2.sh
+bash -n lib/*.sh
+```
+
+### 本地测试
+
+```bash
+# 在虚拟机或测试环境中运行
+sudo bash install_openppp2.sh
+
+# 使用 Docker 测试镜像构建
+docker build -t openppp2-test .
+docker run --rm openppp2-test ./ppp --version
 ```
 
 ---
@@ -231,13 +426,51 @@ shellcheck install_openppp2.sh lib/*.sh
 
 ---
 
+## 更新日志
+
+### v2.1.0 (2024-05-15)
+
+- ✅ 修复所有 ShellCheck 警告（SC2012, SC2164, SC2188, SC2002, SC2086）
+- 🔧 优化 CI/CD workflow 逻辑，使用条件执行避免重复构建
+- 📦 Dockerfile 改用多阶段构建，减少最终镜像体积
+- 📝 增强 README 文档：添加完整部署示例、网络拓扑图、故障排查章节
+- 🔢 添加脚本版本号管理（config.sh）
+- 🛡️ 改进错误处理：所有 `cd` 命令添加失败检查
+
+### v2.0 (之前)
+
+- 🔨 模块化重构：主脚本从 1634 行精简至 314 行（−81%）
+- 📂 50+ 功能函数按职责拆分至 `lib/` 目录
+- 🎯 每个模块职责单一、可独立维护和测试
+
+---
+
 ## 日志
 
 - openppp2 日志：`docker compose logs -f <service>` 或容器内日志文件
 - 安装过程中所有状态信息会输出到终端
+- systemd 服务日志：`journalctl -u openppp2-update.service -f`
+
+---
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+在提交 PR 前，请确保：
+1. 通过 ShellCheck 检查：`shellcheck install_openppp2.sh lib/*.sh`
+2. 在测试环境中验证功能正常
+3. 更新相关文档
 
 ---
 
 ## 许可
 
 本项目脚本和配置按 MIT 许可发布。openppp2 本体按上游 [liulilittle/openppp2](https://github.com/liulilittle/openppp2) 的许可执行。
+
+---
+
+## 致谢
+
+- [openppp2](https://github.com/liulilittle/openppp2) - 上游项目
+- 所有贡献者和用户的反馈

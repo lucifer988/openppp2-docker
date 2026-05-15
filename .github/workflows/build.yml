@@ -40,18 +40,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 如果这个 tag 已经存在，就直接跳过构建（避免每周重复浪费 Actions）
-      - name: Skip if tag already exists
+      - name: Check if tag exists
+        id: check
         run: |
           set -e
           IMAGE="ghcr.io/${{ github.repository_owner }}/openppp2:${{ steps.upstream.outputs.tag }}"
           if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Tag already exists: $IMAGE"
-            exit 0
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag not found, will build: $IMAGE"
           fi
-          echo "Tag not found, will build: $IMAGE"
 
       - name: Build and push (amd64 io-uring-simd)
+        if: steps.check.outputs.exists == 'false'
         uses: docker/build-push-action@v6
         with:
           context: .

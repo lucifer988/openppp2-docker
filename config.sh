@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # config.sh - 默认配置集中管理
 
+# 脚本版本
+SCRIPT_VERSION="2.1.0"
+
 # 应用目录
 APP_DIR="/opt/openppp2"
 

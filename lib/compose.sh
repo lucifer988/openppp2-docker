@@ -43,7 +43,7 @@ LOGEOF
 # === write_compose_server ===
 write_compose_server() {
   local image="$1" cfg="$2"
-  > "$COMPOSE_FILE"
+  : > "$COMPOSE_FILE"
   cat >> "$COMPOSE_FILE" <<SERVEREOF
 services:
   openppp2:
@@ -65,7 +65,7 @@ SERVEREOF
 # === write_compose_client ===
 write_compose_client() {
   local image="$1" nic="$2" gw="$3" svc="$4" cfg="$5" tun_name="$6" tun_ip="$7" tun_gw="$8" use_mux="${9:-no}"
-  > "$COMPOSE_FILE"
+  : > "$COMPOSE_FILE"
   cat >> "$COMPOSE_FILE" <<CLIENTEOF
 services:
   ${svc}:

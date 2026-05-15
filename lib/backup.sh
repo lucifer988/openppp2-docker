@@ -47,7 +47,7 @@ do_restore() {
   fi
 
   local latest
-  latest="$(ls -t ${BACKUP_DIR}/*.bak.* 2>/dev/null | head -1 || true)"
+  latest="$(find "${BACKUP_DIR}" -maxdepth 1 -name "*.bak.*" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"
   if [[ -z "$latest" ]]; then
     die "未找到备份文件。"
   fi

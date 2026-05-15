@@ -221,7 +221,7 @@ ensure_basic_tools() {
 # === gen_guid ===
 gen_guid() {
   local u
-  u="$(cat /proc/sys/kernel/random/uuid | tr '[:lower:]' '[:upper:]')"
+  u="$(tr '[:lower:]' '[:upper:]' < /proc/sys/kernel/random/uuid)"
   echo "{${u}}"
 }
 
@@ -230,7 +230,7 @@ gen_guid() {
 download_base_cfg() {
   local url="$1"
   mkdir -p "$APP_DIR"
-  cd "$APP_DIR"
+  cd "$APP_DIR" || die "无法切换到目录 $APP_DIR"
   info "下载基准配置 appsettings.base.json ..."
   curl_retry -sS "$url" -o appsettings.base.json || die "下载失败：$url"
 }
