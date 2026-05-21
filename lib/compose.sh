@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # lib/compose.sh — Compose YAML 生成
 #
-# 安全相关（点 4）：
-#   - cap_drop: [ALL] 后只白名单两个能力（NET_ADMIN / NET_RAW）
+# 安全特性：
+#   - cap_drop: [ALL] 后只白名单 NET_ADMIN / NET_RAW / NET_BIND_SERVICE
 #   - security_opt: no-new-privileges:true 禁止 setuid 提权
 #   - init: true 让 docker 注入 init 进程，配合镜像里的 tini 处理 PID 1
-#   - 镜像本身以非 root 用户 ppp(uid=1000) 启动（USER 指令在 Dockerfile 里）
+#   - 镜像本身以非 root 用户 ppp(uid=1000) 启动
 #
-# 资源/日志（点 6）：
+# 资源/日志：
 #   - deploy.resources.limits 给容器加内存 + CPU 上限
 #   - logging.options.max-size / max-file 限制日志体积
 
-# Source config.sh for shared constants (APP_DIR, DEFAULT_IMAGE, etc.)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[[ -f "${SCRIPT_DIR}/config.sh" ]] && source "${SCRIPT_DIR}/config.sh"
+SCRIPT_DIR_COMPOSE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[[ -f "${SCRIPT_DIR_COMPOSE}/config.sh" ]] && source "${SCRIPT_DIR_COMPOSE}/config.sh"
 
 # === compose_restart_policy_block ===
 compose_restart_policy_block() {
@@ -27,10 +26,6 @@ RESTARTEOF
 }
 
 # === compose_security_opt_block ===
-# 三层加固：
-#   1) seccomp profile（自定义版，仅放开 io_uring 所需调用）
-#   2) apparmor=unconfined（避免某些发行版默认 profile 拒绝 TUN 操作）
-#   3) no-new-privileges（即使容器内有 setuid 二进制也无法提权）
 compose_security_opt_block() {
   cat <<'SECOPTEOF'
     security_opt:
@@ -41,12 +36,6 @@ SECOPTEOF
 }
 
 # === compose_capabilities_block ===
-# 最小化 Linux capabilities：
-#   - 先 drop ALL，去掉容器默认的一大堆能力（CAP_SYS_CHROOT、CAP_FOWNER 等都没用）
-#   - 再 add 三个真正需要的：
-#       NET_ADMIN: 创建 TUN 设备、改路由
-#       NET_RAW:   ICMP / 原始套接字
-#       NET_BIND_SERVICE: 非 root 用户绑定 <1024 的端口（mappings 里可能有 80）
 compose_capabilities_block() {
   cat <<'CAPEOF'
     cap_drop:
@@ -70,8 +59,6 @@ LOGEOF
 }
 
 # === compose_resources_block ===
-# 资源限制（compose v2 的 docker compose 在非 swarm 模式下也会尊重该字段）。
-# 默认值偏宽，避免误伤；用户可通过环境变量覆盖。
 compose_resources_block() {
   local mem_limit="${OPENPPP2_MEM_LIMIT:-512M}"
   local mem_reserve="${OPENPPP2_MEM_RESERVE:-64M}"
@@ -88,7 +75,6 @@ RESEOF
 }
 
 # === compose_init_block ===
-# 让 docker 注入 init 进程（即使老镜像没装 tini 也能正确收到 SIGTERM）
 compose_init_block() {
   cat <<'INITEOF'
     init: true
@@ -215,7 +201,7 @@ MUXEOF
   fi
 }
 
-# === remove_service_block ===
+# === remove_service_block — 从 compose.yml 中删除指定服务块 ===
 remove_service_block() {
   local svc="$1"
   local tmp

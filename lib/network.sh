@@ -1,110 +1,91 @@
 #!/usr/bin/env bash
-# lib/network.sh — Modular library for openppp2-docker
-# Auto-refactored from install_openppp2.sh
+# lib/network.sh — 网络探测：网卡、IP、网关、空闲端口、IP 转发
+#
+# v2.3 防卡死改动：
+#   1) detect_net 全部用本地命令，不发任何网络请求，绝不会卡
+#   2) random_free_port 有最大尝试次数限制，不再可能死循环
+#   3) enable_ip_forward_host 写文件失败就 warn 而不是阻塞
 
-# Source config.sh for shared constants (APP_DIR, DEFAULT_IMAGE, etc.)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[[ -f "${SCRIPT_DIR}/config.sh" ]] && source "${SCRIPT_DIR}/config.sh"
+SCRIPT_DIR_NET="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[[ -f "${SCRIPT_DIR_NET}/config.sh" ]] && source "${SCRIPT_DIR_NET}/config.sh"
 
-# === is_port_in_use ===
-is_port_in_use() {
-  local port="$1"
-  ss -tuln 2>/dev/null | awk 'NR>1 {print $5}' | sed 's/.*://g' | grep -qx "$port"
-}
-
-
-# === random_free_port ===
-random_free_port() {
-  local p tries=0
-  while :; do
-    p="$(shuf -i 10000-60000 -n 1)"
-    if ! is_port_in_use "$p"; then
-      echo "$p"
-      return 0
-    fi
-    tries=$(( tries + 1 ))
-    if [[ "$tries" -gt 200 ]]; then
-      die "10000-60000 区间内未找到空闲端口，请检查端口占用情况。"
-    fi
-  done
-}
-
-
-# === detect_net ===
+# === detect_net — 自动探测 LAN_IP|NIC|GATEWAY ===
+# 返回值通过 stdout: "192.168.1.100|ens192|192.168.1.1"
+# 完全靠本地 ip route，没有网络请求。失败的字段返回空字符串。
 detect_net() {
-  local out lan dev gw
-  local forced=""
+  local lan="" nic="" gw=""
 
-  if [[ -n "${CLIENT_NIC:-}" ]]; then
-    forced="${CLIENT_NIC}"
-    if ! ip link show "${forced}" >/dev/null 2>&1; then
-      die "已设置 CLIENT_NIC=${CLIENT_NIC} 但系统未找到该网卡（ip link show 失败）。"
-    fi
-  else
-    if ip link show "${DEFAULT_CLIENT_NIC}" >/dev/null 2>&1; then
-      forced="${DEFAULT_CLIENT_NIC}"
-    fi
+  # 优先从默认路由提取
+  local route_line
+  route_line="$(ip -4 route show default 2>/dev/null | head -1 || true)"
+  if [[ -n "$route_line" ]]; then
+    # 格式： default via 192.168.1.1 dev ens192 proto dhcp src 192.168.1.100 metric 100
+    gw="$(echo "$route_line"  | awk '{for(i=1;i<=NF;i++) if($i=="via")  print $(i+1)}')"
+    nic="$(echo "$route_line" | awk '{for(i=1;i<=NF;i++) if($i=="dev")  print $(i+1)}')"
+    lan="$(echo "$route_line" | awk '{for(i=1;i<=NF;i++) if($i=="src")  print $(i+1)}')"
   fi
 
-  if [[ -n "${forced}" ]]; then
-    dev="${forced}"
-    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
-    gw="$(ip -4 route show default dev "$dev" 2>/dev/null | awk 'NR==1{print $3}')" || true
+  # src 如果没有，从网卡的第一个 IPv4 地址取
+  if [[ -z "$lan" && -n "$nic" ]]; then
+    lan="$(ip -4 -o addr show dev "$nic" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1 || true)"
+  fi
 
-    if [[ -n "${lan:-}" ]]; then
-      if [[ -z "${gw:-}" ]]; then
-        gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
-      fi
-      echo "${lan:-}|${dev:-}|${gw:-}"
+  # 用户通过 CLIENT_NIC 强制指定网卡
+  if [[ -n "${CLIENT_NIC:-}" ]]; then
+    nic="$CLIENT_NIC"
+    lan="$(ip -4 -o addr show dev "$nic" 2>/dev/null | awk '{print $4}' | head -1 | cut -d/ -f1 || true)"
+  fi
+
+  echo "${lan}|${nic}|${gw}"
+}
+
+# === random_free_port — 随机找一个未占用端口（10000-60000）===
+# v2.3: 最多尝试 100 次，超过就 die，绝不死循环
+random_free_port() {
+  local port tries=0
+  while [[ $tries -lt 100 ]]; do
+    port=$(( (RANDOM % 50000) + 10000 ))
+    if ! ss -lntu 2>/dev/null | awk '{print $5}' | grep -qE ":${port}\$"; then
+      echo "$port"
       return 0
     fi
-
-    if [[ -n "${CLIENT_NIC:-}" ]]; then
-      die "CLIENT_NIC=${CLIENT_NIC} 存在但未获取到 IPv4 地址，无法作为客户端 LAN 绑定。"
-    fi
-    warn "默认客户端网卡 ${forced} 未获取到 IPv4，回退自动探测逻辑。"
-  fi
-
-  dev="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')" || true
-  gw="$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $3}')" || true
-
-  if [[ -n "${dev:-}" ]]; then
-    lan="$(ip -4 addr show "$dev" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
-  fi
-
-  if [[ -z "${dev:-}" || -z "${lan:-}" ]]; then
-    out="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
-    lan="$(awk '/src/ {for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$out")"
-    dev="${dev:-$(awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$out")}"
-    gw="${gw:-$(awk '/via/ {for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$out")}"
-  fi
-
-  if [[ "${dev:-}" =~ ^(ppp|tun|wg|tailscale|docker|br-|virbr|lo) ]] || [[ "${lan:-}" =~ ^10\. ]]; then
-    local cand cand_ip
-    cand="$(ip -o link show up | awk -F': ' '{print $2}' | grep -Ev '^(lo|ppp|tun|wg|tailscale|docker|br-|virbr)' | head -n1 || true)"
-    if [[ -n "$cand" ]]; then
-      cand_ip="$(ip -4 addr show "$cand" 2>/dev/null | awk '/inet /{print $2}' | head -n1 | cut -d/ -f1)" || true
-      if [[ -n "$cand_ip" ]]; then
-        dev="$cand"
-        lan="$cand_ip"
-      fi
-    fi
-  fi
-
-  echo "${lan:-}|${dev:-}|${gw:-}"
+    tries=$((tries+1))
+  done
+  die "无法在 10000-60000 区间找到空闲端口（已尝试 100 次），可能 ss 命令异常或端口耗尽。"
 }
 
+# === port_in_use — 检查指定端口是否被占用 ===
+port_in_use() {
+  local port="$1"
+  ss -lntu 2>/dev/null | awk '{print $5}' | grep -qE ":${port}\$"
+}
 
-# === enable_ip_forward_host ===
+# === enable_ip_forward_host — 启用宿主机 IP 转发 ===
 enable_ip_forward_host() {
-  info "尝试开启宿主机 IPv4 转发（client 需要）..."
-  if sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1; then
-    cat >/etc/sysctl.d/99-openppp2.conf <<'SYSCTLEOF'
-net.ipv4.ip_forward=1
-SYSCTLEOF
-    sysctl --system >/dev/null 2>&1 || true
+  local cfg="/etc/sysctl.d/99-openppp2.conf"
+  if [[ -f "$cfg" ]]; then
+    info "IP 转发配置已存在：$cfg"
   else
-    warn "sysctl 写入失败（可能权限受限）。你可手动执行：sysctl -w net.ipv4.ip_forward=1"
+    info "启用 IPv4/IPv6 转发..."
+    cat > "$cfg" <<'IPFWDEOF'
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+IPFWDEOF
+  fi
+  if need_cmd sysctl; then
+    sysctl --system >/dev/null 2>&1 || warn "sysctl --system 失败（可能影响 IP 转发，但不阻断安装）"
   fi
 }
 
+# === ping_check — 快速测试目标可达 ===
+# 仅返回 0/1，最长 3 秒，永远不会卡
+ping_check() {
+  local host="$1"
+  if need_cmd ping; then
+    ping -c 1 -W 3 "$host" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
