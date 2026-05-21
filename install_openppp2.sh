@@ -98,10 +98,32 @@ bootstrap_full_project_if_needed() {
 
   chmod +x "${repo_dir}/install_openppp2.sh" >/dev/null 2>&1 || true
   export OPENPPP2_BOOTSTRAPPED=1
-  exec bash "${repo_dir}/install_openppp2.sh" "$@"
+
+  # 关键修复：
+  # 当用户使用 `curl ... | sudo bash` 时，stdin 是脚本管道，不是键盘终端。
+  # 如果直接 exec，后续菜单 read 会从管道/EOF 读取，导致还没让用户选择就采用空值或默认值。
+  # 因此进入完整项目脚本前，优先把 stdin 重新接回真正可打开的 /dev/tty。
+  if exec 3</dev/tty 2>/dev/null; then
+    exec bash "${repo_dir}/install_openppp2.sh" "$@" <&3
+  fi
+
+  echo "[!] 当前没有可用的交互终端（/dev/tty），无法显示交互菜单。" >&2
+  echo "[!] 请改用：curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/install_openppp2.sh -o install_openppp2.sh && sudo bash install_openppp2.sh" >&2
+  exit 1
 }
 
 bootstrap_full_project_if_needed "$@"
+
+ensure_interactive_stdin() {
+  # 当使用 curl ... | sudo bash 时，标准输入会被管道占用；
+  # 菜单 read 会读到 EOF/空值，导致没有机会输入就报“选择错误”。
+  # 进入完整项目脚本后改从 /dev/tty 读取键盘输入，保留真正的一键交互安装体验。
+  if [[ ! -t 0 && -r /dev/tty ]]; then
+    exec </dev/tty
+  fi
+}
+
+ensure_interactive_stdin
 
 # === 加载配置与模块库 ===
 source "${SCRIPT_DIR}/config.sh"

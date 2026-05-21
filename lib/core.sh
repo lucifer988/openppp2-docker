@@ -54,6 +54,29 @@ safer_back() {
 }
 
 # === prompt ===
+_read_from_stdin_or_tty() {
+  local __out_var="$1" __prompt_text="$2" __tmp=""
+
+  # 正常场景：从当前 stdin 读取，兼容用户用 here-doc/重定向做自动化安装。
+  if read -r -p "$__prompt_text" __tmp; then
+    printf -v "$__out_var" "%s" "$__tmp"
+    return 0
+  fi
+
+  # 管道执行脚本时，stdin 可能已经是脚本内容或 EOF；这时回退到真实终端。
+  # 注意：某些环境里 /dev/tty 路径存在，但打开会失败，所以这里必须实际 open。
+  if exec 3</dev/tty 2>/dev/null; then
+    if read -r -p "$__prompt_text" __tmp <&3; then
+      exec 3<&-
+      printf -v "$__out_var" "%s" "$__tmp"
+      return 0
+    fi
+    exec 3<&-
+  fi
+
+  die "无法读取交互输入：当前没有可用终端。请改用下载后运行：curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o install_openppp2.sh && sudo bash install_openppp2.sh"
+}
+
 prompt() {
   local __var="$1" __msg="$2" __def="${3:-}"
   local __val=""
@@ -67,11 +90,12 @@ prompt() {
   fi
 
   if [[ -n "$__def" ]]; then
-    read -r -p "$__msg [$__def]: " __val
+    _read_from_stdin_or_tty __val "$__msg [$__def]: "
     __val="${__val:-$__def}"
   else
-    read -r -p "$__msg: " __val
+    _read_from_stdin_or_tty __val "$__msg: "
   fi
+
   printf -v "$__var" "%s" "$__val"
 }
 

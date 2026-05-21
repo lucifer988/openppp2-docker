@@ -75,10 +75,10 @@ openppp2-docker/
 
 ## Docker 一键安装
 
-> 推荐：直接用下面这一条命令安装。脚本会自动安装/检测 Docker、Docker Compose、依赖工具，并拉取完整项目文件，不再需要手动下载 `config.sh` 或 `lib/` 目录。
+> 推荐使用下面这一条命令。它仍然是一键安装，但不是 `curl | bash` 管道执行，所以不会抢占菜单输入。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh | sudo bash
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o "$tmp" && sudo bash "$tmp"
 ```
 
 执行后按菜单选择：
@@ -94,22 +94,27 @@ curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/ins
 2) 客户端（Client）
 ```
 
-### 传统下载后运行
+### 兼容管道执行方式
 
-如果你不想用管道执行，也可以先下载再运行：
+新版脚本也兼容下面这种方式。脚本进入完整项目后会自动把交互输入切回 `/dev/tty`，避免菜单 `read` 读到空值。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh | sudo bash
+```
+
+### 传统下载后运行
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o install_openppp2.sh
 sudo bash install_openppp2.sh
 ```
 
-> 新版 `install_openppp2.sh` 已支持单文件启动：即使当前目录没有 `config.sh`、`appsettings.base.json`、`lib/*.sh`，脚本也会自动从 GitHub main 分支拉取完整项目临时副本，然后继续安装。因此不会再出现 `/root/config.sh: No such file or directory`。
+> 新版 `install_openppp2.sh` 已支持单文件启动：即使当前目录没有 `config.sh`、`appsettings.base.json`、`lib/*.sh`，脚本也会自动从 GitHub main 分支拉取完整项目临时副本，然后继续安装。因此不会再出现 `/root/config.sh: No such file or directory`，也不会在 `curl | bash` 时因为输入被管道占用而跳过菜单选择。
 
 ### 使用指定镜像版本安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o /tmp/install_openppp2.sh
-sudo OPENPPP2_IMAGE_TAG=1.0.0.26016 bash /tmp/install_openppp2.sh
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o "$tmp" && sudo OPENPPP2_IMAGE_TAG=1.0.0.26016 bash "$tmp"
 ```
 
 ---
@@ -120,7 +125,7 @@ sudo OPENPPP2_IMAGE_TAG=1.0.0.26016 bash /tmp/install_openppp2.sh
 
 ```bash
 # 一键启动安装菜单
-curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh | sudo bash
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o "$tmp" && sudo bash "$tmp"
 
 # 菜单中依次选择：
 # 1) 安装 openppp2
@@ -137,7 +142,7 @@ docker compose -f /opt/openppp2/docker-compose.yml logs -f
 
 ```bash
 # 一键启动安装菜单
-curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh | sudo bash
+tmp="$(mktemp)" && curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh -o "$tmp" && sudo bash "$tmp"
 
 # 菜单中依次选择：
 # 1) 安装 openppp2
