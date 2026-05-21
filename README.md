@@ -1,65 +1,131 @@
-# openppp2-docker hotfix 2.3.2-hotfix
+# openppp2-docker 一键安装版
 
-这是按实际安装报错修好的 hotfix 版本。
+这个项目是 `openppp2` 的 Docker 一键部署脚本。
 
-## 本版修复
+已修复这些常见问题：
 
-1. `apt update` 被 Caddy / Cloudsmith 源 `NO_PUBKEY ABA1F9B8875A6661` 拖垮时，脚本会自动把 `/etc/apt/sources.list.d/*caddy*` 临时挪到 `/root/disabled-apt-sources/`，然后重试。
-2. `/opt/openppp2/appsettings.json` 如果已经被误创建成目录，脚本会自动备份挪走，不再报 `Is a directory`。
-3. `docker compose` 不再被当成一个带空格的可执行文件执行，修复 `timeout: failed to run command ‘docker compose’: No such file or directory`。
-4. 本地构建默认下载 `openppp2 1.0.0.26151`，避免旧地址 `1.0.0.26016` 返回 404。
-5. 默认生成 `seccomp=unconfined`，不再使用过严 seccomp profile，避免 `cannot start a stopped process`。
-6. 启动时使用 `docker compose down` + `up -d --force-recreate`，确保旧容器不会继续沿用旧安全配置。
-7. Compose bind mount 使用 long syntax，并设置 `create_host_path: false`，避免配置文件不存在时 Docker/Compose 又创建同名目录。
+- Caddy 源 `NO_PUBKEY ABA1F9B8875A6661`
+- `appsettings.json: Is a directory`
+- `docker compose: No such file or directory`
+- openppp2 旧版本下载地址 `404`
+- 容器启动时报 `cannot start a stopped process`
 
-## 使用方法
+---
+
+## 一键安装
+
+### 方式一：下载压缩包后安装
 
 ```bash
 cd /root
-tar -xzf openppp2-docker-hotfix-2.3.2-hotfix.tar.gz
-cd openppp2-docker-hotfix-2.3.2-hotfix
-chmod +x install_openppp2.sh
-sudo ./install_openppp2.sh
+tar -xzf openppp2-docker-hotfix-2.3.3-simple.tar.gz
+cd openppp2-docker-hotfix-2.3.3-simple
+sudo bash quick-install.sh
 ```
 
-服务端选择：
+然后按提示选择：
 
 ```text
 1) 安装 openppp2
 1) 服务端（Server）
 ```
 
-客户端选择：
+一路回车即可。
 
-```text
-1) 安装 openppp2
-2) 客户端（Client）
+---
+
+## 上传到 GitHub 后的一键命令
+
+上传到你自己的 GitHub 仓库后，先改一下 `quick-install.sh` 里的这一行：
+
+```bash
+GITHUB_REPO_DEFAULT="你的用户名/你的仓库名"
 ```
 
-## 常用命令
+例如你的仓库是：
+
+```text
+https://github.com/abc/openppp2-docker-hotfix
+```
+
+就改成：
+
+```bash
+GITHUB_REPO_DEFAULT="abc/openppp2-docker-hotfix"
+```
+
+以后别人只需要执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abc/openppp2-docker-hotfix/main/quick-install.sh | sudo bash
+```
+
+---
+
+## 服务端安装成功后
+
+查看容器：
 
 ```bash
 cd /opt/openppp2
 sudo docker compose ps
+```
+
+查看日志：
+
+```bash
 sudo docker logs openppp2 --tail=100
-sudo docker logs openppp2 -f
+```
+
+你的服务端默认端口是：
+
+```text
+20000/tcp
+20000/udp
+```
+
+---
+
+## 卸载
+
+```bash
+cd /root/openppp2-docker-hotfix-2.3.3-simple
+sudo bash quick-install.sh
+```
+
+然后选择：
+
+```text
+2) 卸载 openppp2
+```
+
+---
+
+## 常用命令
+
+重启：
+
+```bash
+cd /opt/openppp2
+sudo docker compose restart
+```
+
+停止：
+
+```bash
+cd /opt/openppp2
 sudo docker compose down
+```
+
+重新启动：
+
+```bash
+cd /opt/openppp2
 sudo docker compose up -d --force-recreate
 ```
 
-## 可覆盖变量
+查看日志：
 
 ```bash
-# 指定镜像
-sudo OPENPPP2_IMAGE_REPO=ghcr.io/lucifer988/openppp2 OPENPPP2_IMAGE_TAG=latest ./install_openppp2.sh
-
-# 指定本地构建时 openppp2 zip 下载地址
-sudo OPENPPP2_ZIP_URL=https://github.com/liulilittle/openppp2/releases/download/1.0.0.26151/openppp2-linux-amd64-simd.zip ./install_openppp2.sh
-
-# 禁止本地构建，只允许 pull 镜像
-sudo ALLOW_LOCAL_BUILD=no ./install_openppp2.sh
+sudo docker logs openppp2 -f
 ```
-
-## 注意
-
-这个 hotfix 包重点修复安装链路。菜单中的「新增客户端实例」和「删除客户端实例」为了避免误改现有 TUN/路由，已改成提示信息，不自动执行多实例变更。
