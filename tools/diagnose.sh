@@ -16,5 +16,14 @@ echo "== /opt/openppp2 =="
 ls -lah /opt/openppp2 2>/dev/null || true
 file /opt/openppp2/appsettings.json 2>/dev/null || true
 echo
+echo "== docker-compose.yml seccomp =="
+grep -n "seccomp" /opt/openppp2/docker-compose.yml 2>/dev/null || true
+echo
 echo "== Containers =="
 docker ps -a --filter name=openppp2 2>/dev/null || true
+echo
+echo "== openppp2 inspect state =="
+docker inspect openppp2 --format '{{json .State}}' 2>/dev/null || true
+echo
+echo "== recent logs =="
+docker logs openppp2 --tail=80 2>/dev/null || true

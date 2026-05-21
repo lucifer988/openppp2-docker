@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # openppp2-docker hotfix installer
-# Version: 2.3.1-hotfix
+# Version: 2.3.2-hotfix
+#
 # 修复点：
 # 1) apt update 被 Caddy 源 NO_PUBKEY 拖垮时，自动禁用坏的 Caddy 源并重试
 # 2) /opt/openppp2/appsettings.json 被 Docker/Compose 误创建成目录时，自动备份挪走
 # 3) docker compose 使用数组执行，不再把 "docker compose" 当成单个命令
 # 4) 本地构建默认使用 openppp2 upstream 1.0.0.26151，可用 OPENPPP2_ZIP_URL 覆盖
+# 5) 默认使用 seccomp=unconfined，避免过严 seccomp profile 导致容器无法启动
+# 6) compose up 默认加 --force-recreate，确保修改 compose 后容器按新配置重建
 
 set -euo pipefail
 
-VERSION="2.3.1-hotfix"
+VERSION="2.3.2-hotfix"
 APP_DIR="${OPENPPP2_APP_DIR:-/opt/openppp2}"
 BACKUP_DIR="${APP_DIR}/backups"
 COMPOSE_FILE="${APP_DIR}/docker-compose.yml"
-SECCOMP_FILE="${APP_DIR}/seccomp-openppp2.json"
 
 DEFAULT_IMAGE_REPO="${OPENPPP2_IMAGE_REPO:-ghcr.io/lucifer988/openppp2}"
 DEFAULT_IMAGE_TAG="${OPENPPP2_IMAGE_TAG:-latest}"
@@ -55,13 +57,13 @@ prompt() {
 prompt_port() {
   local __var="$1" text="$2" default="${3:-20000}" value
   while true; do
+    value=""
     prompt value "$text" "$default"
     if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 )); then
       printf -v "$__var" '%s' "$value"
       return 0
     fi
     warn "端口必须是 1-65535 的数字"
-    value=""
   done
 }
 
@@ -121,13 +123,13 @@ apt_install() {
 
 ensure_basic_tools() {
   local missing=()
-  for c in curl jq tar ip awk sed grep; do
+  for c in curl jq tar ip awk sed grep ss shuf; do
     need_cmd "$c" || missing+=("$c")
   done
   if (( ${#missing[@]} > 0 )); then
     step "安装基础工具：${missing[*]}"
     apt_update_safe || true
-    apt_install curl jq tar iproute2 gawk sed grep ca-certificates || die "基础工具安装失败"
+    apt_install curl jq tar iproute2 gawk sed grep ca-certificates util-linux || die "基础工具安装失败"
   fi
 }
 
@@ -177,44 +179,6 @@ compose_timeout() {
   local seconds="$1"
   shift
   timeout "$seconds" "${COMPOSE[@]}" "$@"
-}
-
-generate_seccomp_profile() {
-  mkdir -p "$APP_DIR"
-  cat > "$SECCOMP_FILE" <<'JSON'
-{
-  "defaultAction": "SCMP_ACT_ERRNO",
-  "archMap": [
-    {
-      "architecture": "SCMP_ARCH_X86_64",
-      "subArchitectures": ["SCMP_ARCH_X86", "SCMP_ARCH_X32"]
-    }
-  ],
-  "syscalls": [
-    {
-      "names": [
-        "accept", "accept4", "access", "arch_prctl", "bind", "brk", "capget", "capset",
-        "chdir", "chmod", "chown", "clock_gettime", "clone", "clone3", "close", "connect",
-        "dup", "dup2", "dup3", "epoll_create", "epoll_create1", "epoll_ctl", "epoll_pwait",
-        "epoll_wait", "eventfd", "eventfd2", "execve", "exit", "exit_group", "fcntl",
-        "fstat", "futex", "getcwd", "getdents64", "geteuid", "getpid", "getppid",
-        "getrandom", "getsockname", "getsockopt", "gettid", "ioctl", "io_uring_enter",
-        "io_uring_register", "io_uring_setup", "listen", "lseek", "madvise", "mkdir",
-        "mmap", "mprotect", "munmap", "nanosleep", "newfstatat", "open", "openat",
-        "pipe", "pipe2", "poll", "ppoll", "prctl", "pread64", "pwrite64", "read",
-        "readlink", "readlinkat", "recvfrom", "recvmsg", "rename", "rseq", "rt_sigaction",
-        "rt_sigprocmask", "rt_sigreturn", "sched_getaffinity", "sendmmsg", "sendmsg",
-        "sendto", "setsockopt", "set_robust_list", "set_tid_address", "sigaltstack",
-        "socket", "socketpair", "stat", "statfs", "sysinfo", "tgkill", "umask", "uname",
-        "unlink", "write", "writev"
-      ],
-      "action": "SCMP_ACT_ALLOW"
-    }
-  ]
-}
-JSON
-  chmod 0644 "$SECCOMP_FILE"
-  info "已生成 seccomp profile：${SECCOMP_FILE}"
 }
 
 copy_base_config() {
@@ -301,7 +265,7 @@ services:
         bind:
           create_host_path: false
     security_opt:
-      - seccomp=${SECCOMP_FILE}
+      - seccomp=unconfined
       - apparmor=unconfined
       - no-new-privileges:true
     cap_drop:
@@ -352,7 +316,7 @@ services:
         bind:
           create_host_path: false
     security_opt:
-      - seccomp=${SECCOMP_FILE}
+      - seccomp=unconfined
       - apparmor=unconfined
       - no-new-privileges:true
     cap_drop:
@@ -398,9 +362,16 @@ compose_up() {
   step "启动容器（最多 ${COMPOSE_UP_TIMEOUT}s）"
   local log="/tmp/openppp2-compose-up.log"
   rm -f "$log"
-  compose_timeout "$COMPOSE_UP_TIMEOUT" -f "$COMPOSE_FILE" up -d --remove-orphans 2>&1 | tee "$log" || {
+
+  # 如果已有同名旧容器，先用 compose down 尝试清理；随后 force-recreate 确保新 compose 安全参数生效。
+  compose_do -f "$COMPOSE_FILE" down --remove-orphans >/dev/null 2>&1 || true
+
+  compose_timeout "$COMPOSE_UP_TIMEOUT" -f "$COMPOSE_FILE" up -d --force-recreate --remove-orphans 2>&1 | tee "$log" || {
     warn "compose up 失败，最后 30 行日志："
     tail -n 30 "$log" >&2 || true
+    warn "自动输出诊断信息："
+    docker ps -a --filter name=openppp2 || true
+    docker inspect openppp2 --format '{{json .State}}' 2>/dev/null || true
     die "容器启动失败"
   }
 }
@@ -427,7 +398,6 @@ do_install_server() {
   ensure_docker
   detect_compose
   copy_base_config
-  generate_seccomp_profile
 
   local IMAGE="$DEFAULT_IMAGE"
   prompt IMAGE "请输入镜像地址" "$DEFAULT_IMAGE"
@@ -468,7 +438,6 @@ do_install_client() {
   ensure_docker
   detect_compose
   copy_base_config
-  generate_seccomp_profile
 
   local IMAGE="$DEFAULT_IMAGE"
   prompt IMAGE "请输入镜像地址" "$DEFAULT_IMAGE"
