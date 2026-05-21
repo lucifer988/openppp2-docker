@@ -1,335 +1,284 @@
 # openppp2-docker
 
-> **v2.3 防卡死版** — 全面修复 v2.2 在某些环境下一键脚本会卡住的问题：所有网络、apt、docker、systemd 操作都加了硬超时；非交互模式自动跳过 prompt；镜像拉取失败自动回退到本地 Dockerfile 构建。
+## 这是做什么的
 
-一键安装 / 更新 openppp2 的 Docker 化部署脚本。Server / Client 双模式、多实例、自动更新 + 健康检查 + 失败回滚。
+这是一个用于部署 openppp2 的 Docker 项目。
 
----
+它通过安装脚本帮助你在服务器上快速创建 openppp2 服务端或客户端容器，并把配置文件、Docker Compose 文件和相关管理操作统一放到 `/opt/openppp2` 目录下。
 
-## v2.3 关键改动（针对"脚本卡住"问题）
+## 使用方法
 
-| 问题 | 根因 | v2.3 修复 |
-| --- | --- | --- |
-| `apt-get update` 卡死 | 上游源慢 / IPv6 黑洞 / dpkg lock 被 unattended-upgrades 占用 | 硬超时 `APT_TIMEOUT=180s`，等 dpkg lock 最多 60s 后强行继续，强制 IPv4 |
-| `docker pull` 卡死 | GHCR 镜像不存在 / 网络慢 | 硬超时 `COMPOSE_PULL_TIMEOUT=600s`，**失败自动回退到本地 Dockerfile 构建** |
-| `compose up -d` 卡死 | 镜像拉取卡死 / 容器启动失败 | 硬超时 `COMPOSE_UP_TIMEOUT=180s`，失败打印最近 30 行日志 |
-| 健康检查 60s 阻塞 | v2.2 写死 sleep 60 | 改为带进度条的 `HEALTH_CHECK_TIMEOUT=40s` 轮询 |
-| `read` 永远等待 | 脚本通过 `curl \| bash` 运行，stdin 没接终端 | **自动检测 NONINTERACTIVE**，无 TTY 时所有 prompt 用默认值；交互模式 prompt 加 5 分钟超时 |
-| `systemctl enable --now` 卡死 | systemd 单元依赖循环 / sd-bus 慢 | 所有 systemctl 调用 `timeout 30s` 包住 |
-| `curl` 公网 IP 检测卡死 | 被墙 / 慢 | `curl_retry` 显式 `--connect-timeout 10 --max-time 60` |
-| 公网 IP 检测失败 → 整个脚本中止 | 之前直接 die | 检测失败时仅 warn 并要求手动输入 |
+### 1. 准备环境
 
-### 调试新工具
+建议使用 Debian / Ubuntu 系统，并使用 root 用户或带 sudo 权限的用户执行。
+
+客户端模式需要系统支持 TUN：
 
 ```bash
-# 完整 trace（每条命令打印行号和时间）
-sudo OPENPPP2_DEBUG=1 ./install_openppp2.sh
+ls -l /dev/net/tun
+如果提示不存在，可以尝试：
 
-# 完全无人值守（CI / 批量部署）
-sudo OPENPPP2_NONINTERACTIVE=1 \
-     SERVER_IP=1.2.3.4 SERVER_PORT=20000 \
-     CLIENT_NIC=ens192 \
-     ./install_openppp2.sh
+sudo modprobe tun
+2. 下载完整项目
+不要只下载 install_openppp2.sh 单个文件，因为安装脚本还需要同目录下的 config.sh 和 lib/ 目录。
 
-# 增加单步超时（网络很慢的环境）
-sudo NET_TIMEOUT=120 COMPOSE_PULL_TIMEOUT=1200 ./install_openppp2.sh
+推荐使用 git 下载完整项目：
 
-# 禁用本地 build fallback（生产环境只想用预构建镜像）
-sudo ALLOW_LOCAL_BUILD=no ./install_openppp2.sh
-```
+cd /root
 
----
+sudo apt update
+sudo apt install -y git
 
-## 完整特性
-
-- 🚀 **一键安装**：自动检测并安装 Docker、Compose 及所有系统依赖
-- 🔀 **双模式**：Server / Client 引导式交互配置
-- 📦 **多实例**：同机多个客户端容器，各自独立 TUN / 端口 / 配置
-- 🔄 **自动更新 + 回滚**：systemd timer 周更新，健康检查不通过自动回退到旧镜像，可发送 webhook 通知
-- 🛡️ **多层容器加固**：
-  - 自定义 seccomp profile（仅放开 io_uring 必要 syscall）
-  - `cap_drop ALL` + 白名单 `NET_ADMIN / NET_RAW / NET_BIND_SERVICE`
-  - `no-new-privileges:true` 禁运行期提权
-  - 非 root 用户 `ppp(uid=1000)` 启动 + tini PID 1
-- 📦 **镜像下载校验**：CI 计算上游 zip 的 SHA256 通过 build-arg 注入 Dockerfile
-- 📊 **资源与日志限制**：内存上限 / CPU 上限 / 日志大小都写进 compose
-- 🌐 **网络自适应**：自动探测网卡、IP、网关（纯本地命令，绝不卡）
-
----
-
-## 前置条件
-
-- **OS**：Debian / Ubuntu（推荐 11+）
-- **内核**：Linux 5.1+（io_uring 必需）
-- **权限**：root 或 sudo
-- **TUN**（Client 模式）：`/dev/net/tun` 可用，`modprobe tun`
-- **网络**：Client 能访问 Server 的 PPP 端口（默认 UDP+TCP 20000）
-
----
-
-## 目录结构
-
-```
-openppp2-docker/
-├── install_openppp2.sh        # 主入口
-├── config.sh                  # 全局常量 + 超时 + 防卡死开关
-├── appsettings.base.json      # 基准配置模板
-├── Dockerfile                 # 多阶段 + SHA256 校验 + 非 root + HEALTHCHECK
-├── .github/workflows/build.yml
-└── lib/
-    ├── core.sh                # 工具 + prompt(带超时) + curl_retry + apt_install
-    ├── network.sh             # detect_net + random_free_port + IP 转发
-    ├── seccomp.sh             # seccomp profile 生成
-    ├── docker.sh              # daemon 安装 + compose 探测 + 健康检查 + 本地 build fallback
-    ├── compose.sh             # YAML 生成（cap_drop / 资源 / 日志 / init / 非 root）
-    ├── systemd.sh             # boot-delay + weekly update timer + 健康检查回滚
-    ├── client.sh              # 多实例 add / list / delete
-    └── backup.sh              # 备份 + 恢复
-```
-
----
-
-## 快速开始
-
-### 服务端
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/install_openppp2.sh \
-  -o install_openppp2.sh
-chmod +x install_openppp2.sh
-sudo ./install_openppp2.sh
-# 选择 1 - 服务端
-# 输入公网 IP / 监听 IP
-```
-
-> **重要**：通过 `curl | sudo bash` 这种管道形式运行会触发非交互模式（因为 stdin 不是 TTY），所有 prompt 会使用默认值。如果你需要交互，请先 `curl -o` 下载文件再运行。
-
-### 客户端
-
-```bash
-sudo ./install_openppp2.sh
-# 选择 2 - 客户端
-# 输入服务端 IP / 端口
-```
-
-### 完全无人值守（CI / 批量部署）
-
-```bash
-sudo OPENPPP2_NONINTERACTIVE=1 \
-     ROLE=2 \
-     SERVER_IP=1.2.3.4 SERVER_PORT=20000 \
-     IMAGE=ghcr.io/lucifer988/openppp2:latest \
-     APP_CFG_NAME=appsettings.json \
-     MAIN_SERVICE_NAME=openppp2 \
-     CLIENT_NIC=ens192 \
-     USE_MUX=no USE_PROXY=no \
-     ACTION=1 \
-     ./install_openppp2.sh
-```
-
----
-
-## 镜像版本管理
-
-CI 每周构建会同时打两个 tag：
-
-| Tag | 用途 | 推荐 |
-| --- | --- | --- |
-| `:latest`             | 跟随上游每周更新 | 个人使用，开了 weekly timer |
-| `:<upstream-tag>`     | 例如 `:1.0.0.26016` | 生产环境，可重现部署 |
-
-固定版本：
-
-```bash
-sudo OPENPPP2_IMAGE_TAG=1.0.0.26016 ./install_openppp2.sh
-```
-
----
-
-## 故障排查
-
-### 脚本"卡住"了，怎么办？
-
-**v2.3 应该不会再卡，但如果还是遇到**：
-
-1. 先用 `OPENPPP2_DEBUG=1` 重跑，看停在哪一行
-   ```bash
-   sudo OPENPPP2_DEBUG=1 ./install_openppp2.sh 2>&1 | tee /tmp/install.log
-   ```
-2. 看 `[*]` 日志最后一条是什么阶段
-3. 常见停顿点：
-   - `等待其他 apt 进程释放锁...` → `sudo systemctl stop unattended-upgrades` 后重试
-   - `拉取镜像（最多 600s）...` → 网络问题，可设置 `OPENPPP2_IMAGE_REPO` 用国内镜像源
-   - `健康检查容器...` → 看 `docker logs openppp2` 找原因
-
-### apt-get 卡在 IPv6
-
-v2.3 已自动写 `/etc/apt/apt.conf.d/99force-ipv4`，强制走 IPv4。
-
-### Docker pull 卡死 / GHCR 镜像不存在
-
-v2.3 会自动回退到本地构建（`ALLOW_LOCAL_BUILD=yes` 默认）。如果你的服务器无法访问 GitHub，可以本地预先 build：
-
-```bash
+git clone https://github.com/lucifer988/openppp2-docker.git
 cd openppp2-docker
-docker build -t ghcr.io/lucifer988/openppp2:latest .
+
+chmod +x install_openppp2.sh
+如果没有 git，也可以下载完整压缩包：
+
+cd /root
+
+sudo apt update
+sudo apt install -y curl tar
+
+curl -L https://github.com/lucifer988/openppp2-docker/archive/refs/heads/main.tar.gz -o openppp2-docker.tar.gz
+tar -xzf openppp2-docker.tar.gz
+cd openppp2-docker-main
+
+chmod +x install_openppp2.sh
+3. 启动安装脚本
+进入项目目录后执行：
+
 sudo ./install_openppp2.sh
-```
+脚本会显示主菜单：
 
-### 健康检查未通过
+1) 安装 openppp2
+2) 卸载 openppp2
+3) 新增 openppp2 客户端实例
+4) 查看客户端配置和代理信息
+5) 删除客户端实例/配置
+6) 备份当前配置文件
+7) 回滚（恢复最新备份）
+首次部署选择：
 
-```bash
-docker logs openppp2 --tail 100
-docker inspect --format '{{json .State.Health}}' openppp2 | jq
-```
+1) 安装 openppp2
+然后脚本会继续让你选择部署角色：
 
-常见原因：
-- `io_uring_queue_init: Operation not permitted` → seccomp profile 缺失，重新跑安装脚本会自动生成
-- TUN 设备没权限 → 确认 `/dev/net/tun` 存在且 compose 里有 `devices: - /dev/net/tun:/dev/net/tun`
-- 内核 < 5.1 → 升级内核
+1) 服务端（Server）
+2) 客户端（Client）
+4. 安装服务端
+服务端机器上执行：
 
-### 容器无法启动
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+操作步骤：
 
-```bash
-docker compose -f /opt/openppp2/docker-compose.yml logs --tail=200
-cat /opt/openppp2/appsettings.json | jq .
-```
+请选择操作：1
+请选择安装/部署角色：1
+后续按提示输入：
 
-### 客户端连不到服务端
+镜像地址：直接回车使用默认值
+基准配置文件 URL：直接回车使用默认值
+服务端配置文件名：默认 appsettings.json
+服务端对外公网 IP：填写你的服务端公网 IP
+服务端监听 bind IP：如果是直连公网 IP，填公网 IP；如果服务器在 NAT 后面，填内网 IP
+安装完成后，配置会生成在：
 
-```bash
-nc -zv  <服务端IP> 20000   # TCP
-nc -zuv <服务端IP> 20000   # UDP
-sudo ss -tulnp | grep 20000   # 服务端检查
-sudo ufw status               # 防火墙
-```
+/opt/openppp2
+查看容器状态：
 
-### 端口冲突
+cd /opt/openppp2
+sudo docker compose ps
+查看运行日志：
 
-脚本会自动从 10000-60000 随机分配，仍有冲突可手动改 `appsettings.json` 的 `http-proxy.port` / `socks-proxy.port` 后重启容器。
+cd /opt/openppp2
+sudo docker compose logs -f
+如果你的系统使用旧版 Compose 命令，可以改用：
 
-### 卸载 / 重装
+sudo docker-compose ps
+sudo docker-compose logs -f
+服务端默认端口通常为：
 
-```bash
-sudo ./install_openppp2.sh   # 选 2 卸载
-sudo ./install_openppp2.sh   # 重新选 1 安装
-```
+20000
+请确保服务端防火墙、安全组或云服务器控制台已经放行 TCP 和 UDP 的对应端口。
 
----
+5. 安装客户端
+客户端机器上执行：
 
-## 环境变量速查（v2.3）
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+操作步骤：
 
-```bash
-# === 超时（全部秒）===
-NET_TIMEOUT=60               # curl 单次请求
-NET_CONNECT_TIMEOUT=10       # curl TCP 握手
-APT_TIMEOUT=180              # apt-get update / install
-DOCKER_PULL_TIMEOUT=300      # 单镜像 docker pull
-COMPOSE_PULL_TIMEOUT=600     # docker compose pull
-COMPOSE_UP_TIMEOUT=180       # docker compose up -d
-HEALTH_CHECK_TIMEOUT=40      # 容器健康检查总等待
-HEALTH_GRACE_SEC=20          # 容器启动后等多久才检查
+请选择操作：1
+请选择安装/部署角色：2
+后续按提示输入：
 
-# === 行为开关 ===
-OPENPPP2_NONINTERACTIVE=1    # 强制非交互（默认按 stdin TTY 自动判断）
-ALLOW_LOCAL_BUILD=yes        # 镜像拉取失败时回退到本地 Dockerfile 构建
-OPENPPP2_DEBUG=1             # 开 set -x
+镜像地址：直接回车使用默认值
+基准配置文件 URL：直接回车使用默认值
+客户端配置文件名：默认 appsettings.json
+主客户端实例名称：默认 openppp2
+服务端 IP：填写服务端公网 IP
+服务端端口：默认 20000
+客户端内网 IP：如果脚本自动检测正确，直接回车；否则手动输入，例如 192.168.1.100
+默认网卡名：如果脚本自动检测正确，直接回车；否则手动输入，例如 eth0、ens3、ens192
+默认网关：如果脚本自动检测正确，直接回车；否则手动输入，例如 192.168.1.1
+是否开启 mux：一般填 no
+是否为 Docker 配置 HTTP 代理来拉取镜像：不需要代理填 no，需要代理填 yes
+客户端安装完成后，脚本会输出类似信息：
 
-# === 镜像 ===
-OPENPPP2_IMAGE_REPO=ghcr.io/lucifer988/openppp2
-OPENPPP2_IMAGE_TAG=latest
+SOCKS5：客户端内网IP:随机端口
+HTTP ：客户端内网IP:随机端口
+以后需要查看客户端代理地址，可以重新运行脚本：
 
-# === 资源限制 ===
-OPENPPP2_MEM_LIMIT=512M
-OPENPPP2_MEM_RESERVE=64M
-OPENPPP2_CPU_LIMIT=1.0
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+然后选择：
 
-# === 部署相关 ===
-CLIENT_NIC=ens192            # 客户端网卡
-OPENPPP2_BOOT_DELAY=20       # 开机延迟启动（秒，0=禁用）
-STRICT_BOOT_DELAY_MODE=no    # yes=systemd 全权控制启动顺序
-```
+4) 查看客户端配置和代理信息
+6. 新增客户端实例
+只有已经以客户端模式安装过的机器，才能新增客户端实例。
 
----
+执行：
 
-## 自动更新与失败回滚
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+选择：
 
-`openppp2-update.timer` 每周日 03:00 UTC（默认）触发，工作流：
+3) 新增 openppp2 客户端实例
+按提示输入：
 
-1. 记录所有服务**当前**镜像 digest
-2. `docker compose pull`（600s 超时）
-3. 镜像无变化 → 直接退出
-4. `docker compose up -d`（180s 超时）
-5. 等 30s 让容器进入稳态
-6. 逐个跑健康检查
-7. 任一不健康 → 用旧 digest 重新 tag 当前镜像引用并重启 = 回滚
+镜像地址：直接回车使用默认值
+新实例服务名：例如 openppp2-2
+新实例配置文件名：例如 appsettings-openppp2-2.json
+服务端 IP：填写服务端公网 IP
+服务端端口：默认 20000
+客户端内网 IP：自动检测正确就回车，否则手动填写
+默认网卡名：自动检测正确就回车，否则手动填写
+默认网关：自动检测正确就回车，否则手动填写
+是否开启 mux：一般填 no
+完成后脚本会输出该实例的 SOCKS5 和 HTTP 代理地址。
 
-可选通知：在 `/etc/default/openppp2-update` 写入
+7. 查看客户端配置和代理信息
+执行：
 
-```bash
-OPENPPP2_UPDATE_WEBHOOK="https://api.day.app/<KEY>/{title}/{body}"
-```
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+选择：
 
-退出码：`0=成功 / 1=失败已回滚 / 2=回滚也失败`
+4) 查看客户端配置和代理信息
+脚本会列出每个客户端实例的：
 
-更新日志：`/var/log/openppp2-update.log`
+服务名
+配置文件
+服务端地址
+bind 地址
+SOCKS5 地址
+HTTP 地址
+8. 删除客户端实例
+执行：
 
----
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+选择：
 
-## 多实例
+5) 删除客户端实例/配置
+脚本会列出当前客户端实例，输入要删除的编号即可。
 
-每个新增 client 自动分配：
+9. 备份配置
+执行：
 
-- TUN 设备：`ppp2`, `ppp3` ...
-- TUN IP 段：`10.0.2.0/30`, `10.0.3.0/30` ...
-- HTTP / SOCKS5 端口：10000-60000 随机
-- 配置文件：`appsettings-<svc>.json`
-- IP 路由表 / DNS 规则：`ip-<svc>.txt`, `dns-rules-<svc>.txt`
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+选择：
 
----
+6) 备份当前配置文件
+备份文件会保存到：
 
-## 安全建议
+/opt/openppp2/backups
+10. 回滚配置
+执行：
 
-生产部署必做：
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+选择：
 
-1. 修改 `appsettings.json` 里的所有密钥（用 `openssl rand -base64 24` 生成）
-2. `iptables` / `ufw` 把 20000 端口限制在已知客户端 IP 段
-3. 设置 `OPENPPP2_UPDATE_WEBHOOK`，更新失败第一时间知道
-4. 用 `:1.0.0.X` 固定 tag 而不是 `:latest`
+7) 回滚（恢复最新备份）
+恢复后建议重新启动容器：
 
----
+cd /opt/openppp2
+sudo docker compose up -d
+如果你的系统使用旧版 Compose 命令：
 
-## 更新日志
+cd /opt/openppp2
+sudo docker-compose up -d
+11. 卸载
+执行：
 
-### v2.3.0 (2026-05) — 防卡死专版
+cd /root/openppp2-docker
+sudo ./install_openppp2.sh
+选择：
 
-- 🔧 **所有阻塞操作加硬超时**：apt / curl / docker pull / compose up / systemctl 都不会无限等待
-- 🔧 **非交互模式自动检测**：`! -t 0` 时所有 prompt 用默认值，不再阻塞
-- 🔧 **prompt 5 分钟超时**：交互模式下也不会永远等
-- 🔧 **镜像拉取失败 → 本地构建**：`ALLOW_LOCAL_BUILD=yes` 默认开启
-- 🔧 **健康检查改为进度反馈**：v2.2 阻塞 60s 改为 40s 轮询带进度
-- 🔧 **dpkg lock 智能等待**：最多 60s 后强行继续
-- 🔧 **OPENPPP2_DEBUG 调试模式**：一行 export 全程 trace
-- 🔧 **网络探测纯本地命令**：detect_net 不再发任何网络请求
+2) 卸载 openppp2
+脚本会停止并删除 openppp2 容器和相关配置，但不会卸载 Docker。
 
-### v2.2.0
+12. 非交互安装示例
+如果需要无人值守安装，可以通过环境变量传入参数。
 
-- 🔐 SHA256 镜像下载校验、非 root 用户、tini、HEALTHCHECK
-- 🛡️ cap_drop ALL、no-new-privileges、资源限制、日志轮转
-- 🔁 自动更新带健康检查 + 失败回滚 + webhook 通知
-- 🎯 镜像版本管理拆分 REPO + TAG
+服务端示例：
 
-### v2.1.0
+cd /root/openppp2-docker
 
-- ✅ ShellCheck 警告全部修复
-- 📦 Dockerfile 多阶段构建
+sudo OPENPPP2_NONINTERACTIVE=1 \
+  ACTION=1 \
+  ROLE=1 \
+  SERVER_PUBLIC_IP=1.2.3.4 \
+  SERVER_BIND_IP=1.2.3.4 \
+  ./install_openppp2.sh
+客户端示例：
 
-### v2.0
+cd /root/openppp2-docker
 
-- 🔨 模块化重构
+sudo OPENPPP2_NONINTERACTIVE=1 \
+  ACTION=1 \
+  ROLE=2 \
+  SERVER_IP=1.2.3.4 \
+  SERVER_PORT=20000 \
+  CLIENT_NIC=eth0 \
+  USE_MUX=no \
+  USE_PROXY=no \
+  ./install_openppp2.sh
+其中：
 
----
+ACTION=1 表示安装
+ROLE=1 表示服务端
+ROLE=2 表示客户端
+SERVER_IP 是服务端 IP
+SERVER_PORT 是服务端端口
+CLIENT_NIC 是客户端默认网卡名
+13. 常用命令
+进入配置目录：
 
-## 许可
+cd /opt/openppp2
+查看容器：
 
-MIT。openppp2 本体许可遵循 [liulilittle/openppp2](https://github.com/liulilittle/openppp2)。
+sudo docker compose ps
+查看日志：
+
+sudo docker compose logs -f
+重启容器：
+
+sudo docker compose restart
+停止容器：
+
+sudo docker compose down
+重新启动容器：
+
+sudo docker compose up -d
+查看配置文件：
+
+ls -lah /opt/openppp2
+查看主配置：
+
+cat /opt/openppp2/appsettings.json
+如果你的系统使用旧版 Compose 命令，把上面的 docker compose 改成 docker-compose 即可。
+
+::contentReference[oaicite:1]{index=1}
