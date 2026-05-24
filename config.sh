@@ -2,7 +2,14 @@
 # config.sh - 默认配置集中管理
 
 # 脚本版本
-SCRIPT_VERSION="2.2.0"
+SCRIPT_VERSION="2.3.0"
+
+# 本仓库的固定下载基准（tag）。安装脚本、基准配置、兜底 Dockerfile 等所有"从本仓库下载"
+# 的动作都锚定到这个 tag，而不是 main 分支，保证可复现、可审计。
+# 可用环境变量 OPENPPP2_REF 覆盖（例如临时指向某个 tag/commit 调试）。
+# 注意：install_openppp2.sh 自举阶段（在 source 本文件之前）也有一份同名默认值，二者需一致。
+REPO_REF="${OPENPPP2_REF:-v2.3.0}"
+REPO_RAW_BASE="https://raw.githubusercontent.com/lucifer988/openppp2-docker/${REPO_REF}"
 
 # 应用目录
 APP_DIR="/opt/openppp2"
@@ -25,17 +32,21 @@ LOG_MAX_FILE="${LOG_MAX_FILE:-3}"
 # 服务端 ppp.log 文件日志的自动轮转（systemd 定时检查；客户端不写文件日志，不涉及）
 #   openppp2 一直占着该文件句柄且非 append 写入，原地截断会留下稀疏文件，
 #   因此用「归档 + 重建容器」的方式彻底清零（重建容器 = 全新可写层 = ppp.log 归零）。
-PPP_LOG_MAX_MB="${PPP_LOG_MAX_MB:-200}"            # ppp.log 超过此大小(MB)即归档并重建容器
-PPP_LOG_KEEP="${PPP_LOG_KEEP:-5}"                  # 宿主机保留的历史归档份数，超出自动删除
-PPP_LOG_ROTATE_ONCAL="${PPP_LOG_ROTATE_ONCAL:-daily}"  # 检查频率（systemd OnCalendar 语法）
+PPP_LOG_MAX_MB="${PPP_LOG_MAX_MB:-200}"               # ppp.log 超过此大小(MB)即归档并重建容器
+PPP_LOG_KEEP="${PPP_LOG_KEEP:-5}"                     # 宿主机保留的历史归档份数，超出自动删除
+PPP_LOG_ROTATE_ONCAL="${PPP_LOG_ROTATE_ONCAL:-daily}" # 检查频率（systemd OnCalendar 语法）
 
 # 上游项目（本地兜底构建时拉取 release zip 用）
 UPSTREAM_REPO="liulilittle/openppp2"
 # 兜底构建时使用的固定上游版本（GHCR 不可用且无法查询最新版时使用）
-FALLBACK_UPSTREAM_TAG="${FALLBACK_UPSTREAM_TAG:-1.0.0.26016}"
+FALLBACK_UPSTREAM_TAG="${FALLBACK_UPSTREAM_TAG:-1.0.0.26151}"
+# 上述固定版本 openppp2-linux-amd64-simd.zip 的 SHA256；用固定版本兜底构建时校验完整性。
+# 若 build_image_local 改用"查询到的最新版"，则 sha 未知，会留空跳过校验（见 docker.sh）。
+FALLBACK_UPSTREAM_SHA256="${FALLBACK_UPSTREAM_SHA256:-8718483672c9cab36fedd3ebdb233600d967aba9452a074af6a8620473639d29}"
 
 # 配置文件 URL（download_base_cfg 优先用脚本同目录的本地副本，失败再用这个）
-DEFAULT_BASE_CFG_URL="https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/appsettings.base.json"
+# 锚定到固定 tag，避免 main 漂移。
+DEFAULT_BASE_CFG_URL="${REPO_RAW_BASE}/appsettings.base.json"
 
 # 自动更新时间（systemd timer）
 DEFAULT_ONCAL="Sun *-*-* 03:00:00"

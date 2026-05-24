@@ -10,10 +10,10 @@ do_backup() {
 
   local n=0
   for f in "$APP_DIR"/appsettings*.json; do
-    [[ -e "$f" ]] && { cp -a "$f" "$snap"/ && n=$((n+1)); }
+    [[ -e "$f" ]] && { cp -a "$f" "$snap"/ && n=$((n + 1)); }
   done
-  [[ -f "$COMPOSE_FILE" ]] && cp -a "$COMPOSE_FILE" "$snap"/ && n=$((n+1))
-  [[ -f "$SECCOMP_FILE" ]] && cp -a "$SECCOMP_FILE" "$snap"/ && n=$((n+1))
+  [[ -f "$COMPOSE_FILE" ]] && cp -a "$COMPOSE_FILE" "$snap"/ && n=$((n + 1))
+  [[ -f "$SECCOMP_FILE" ]] && cp -a "$SECCOMP_FILE" "$snap"/ && n=$((n + 1))
   [[ -f "${APP_DIR}/.instances" ]] && cp -a "${APP_DIR}/.instances" "$snap"/ || true
   [[ -f "${APP_DIR}/.image" ]] && cp -a "${APP_DIR}/.image" "$snap"/ || true
 
@@ -23,8 +23,8 @@ do_backup() {
 # 找到最新备份目录
 _latest_backup() {
   [[ -d "$BACKUP_DIR" ]] || return 1
-  find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
-    | sort -rn | awk 'NR==1{ $1=""; sub(/^ /,""); print }'
+  find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | awk 'NR==1{ $1=""; sub(/^ /,""); print }'
 }
 
 do_restore() {
@@ -34,10 +34,10 @@ do_restore() {
 
   info "从最新备份恢复：${snap}"
   cp -a "$snap"/appsettings*.json "$APP_DIR"/ 2>/dev/null || true
-  [[ -f "$snap/docker-compose.yml" ]]      && cp -a "$snap/docker-compose.yml"      "$COMPOSE_FILE"
-  [[ -f "$snap/seccomp-openppp2.json" ]]   && cp -a "$snap/seccomp-openppp2.json"   "$SECCOMP_FILE"
-  [[ -f "$snap/.instances" ]]              && cp -a "$snap/.instances"              "${APP_DIR}/.instances"
-  [[ -f "$snap/.image" ]]                  && cp -a "$snap/.image"                  "${APP_DIR}/.image"
+  [[ -f "$snap/docker-compose.yml" ]] && cp -a "$snap/docker-compose.yml" "$COMPOSE_FILE"
+  [[ -f "$snap/seccomp-openppp2.json" ]] && cp -a "$snap/seccomp-openppp2.json" "$SECCOMP_FILE"
+  [[ -f "$snap/.instances" ]] && cp -a "$snap/.instances" "${APP_DIR}/.instances"
+  [[ -f "$snap/.image" ]] && cp -a "$snap/.image" "${APP_DIR}/.image"
 
   if need_cmd docker; then
     detect_compose >/dev/null 2>&1 || true

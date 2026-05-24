@@ -4,8 +4,17 @@
 # 若只下载/管道运行了本文件（缺少 lib/），脚本会自动下载完整项目并重新执行。
 set -euo pipefail
 
-# 完整项目 tar 包地址（可用环境变量覆盖到镜像源）
-OPENPPP2_REPO_TARBALL="${OPENPPP2_REPO_TARBALL:-https://github.com/lucifer988/openppp2-docker/archive/refs/heads/main.tar.gz}"
+# 收紧默认权限：本脚本会写入含密钥的配置文件（appsettings*.json）、凭据、compose 等，
+# umask 077 确保新建文件默认 600、目录 700，避免世界可读。各处仍会显式 chmod 兜底。
+umask 077
+
+# 本仓库固定下载基准（tag）。自举阶段早于 source config.sh，故这里也要有一份默认值，
+# 必须与 config.sh 中的 REPO_REF 保持一致。可用 OPENPPP2_REF 覆盖。
+OPENPPP2_REF="${OPENPPP2_REF:-v2.3.0}"
+
+# 完整项目 tar 包地址：锚定到固定 tag（不再默认 main 分支），保证可复现。
+# 可用环境变量 OPENPPP2_REPO_TARBALL 覆盖到镜像源。
+OPENPPP2_REPO_TARBALL="${OPENPPP2_REPO_TARBALL:-https://github.com/lucifer988/openppp2-docker/archive/refs/tags/${OPENPPP2_REF}.tar.gz}"
 
 # 解析自身所在目录（管道运行时可能拿不到，故容错）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$PWD")"
@@ -16,8 +25,14 @@ _bootstrap_if_needed() {
   [[ -f "${SCRIPT_DIR}/lib/core.sh" && -f "${SCRIPT_DIR}/config.sh" ]] && return 0
 
   echo "[INFO] 未检测到模块文件，正在下载完整项目..."
-  command -v curl >/dev/null 2>&1 || { echo "[ERROR] 需要 curl，请先安装。" >&2; exit 1; }
-  command -v tar  >/dev/null 2>&1 || { echo "[ERROR] 需要 tar，请先安装。"  >&2; exit 1; }
+  command -v curl >/dev/null 2>&1 || {
+    echo "[ERROR] 需要 curl，请先安装。" >&2
+    exit 1
+  }
+  command -v tar >/dev/null 2>&1 || {
+    echo "[ERROR] 需要 tar，请先安装。" >&2
+    exit 1
+  }
 
   local tmp dir
   tmp="$(mktemp -d)"
@@ -26,10 +41,16 @@ _bootstrap_if_needed() {
     echo "        可设置 OPENPPP2_REPO_TARBALL 指向镜像源后重试。" >&2
     exit 1
   fi
-  tar -xzf "${tmp}/repo.tar.gz" -C "$tmp" || { echo "[ERROR] 解压失败。" >&2; exit 1; }
+  tar -xzf "${tmp}/repo.tar.gz" -C "$tmp" || {
+    echo "[ERROR] 解压失败。" >&2
+    exit 1
+  }
   dir="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d -name 'openppp2-docker*' | head -n1)"
-  [[ -n "$dir" && -f "${dir}/install_openppp2.sh" && -f "${dir}/lib/core.sh" ]] \
-    || { echo "[ERROR] 项目结构异常，无法继续。" >&2; exit 1; }
+  [[ -n "$dir" && -f "${dir}/install_openppp2.sh" && -f "${dir}/lib/core.sh" ]] ||
+    {
+      echo "[ERROR] 项目结构异常，无法继续。" >&2
+      exit 1
+    }
   chmod +x "${dir}/install_openppp2.sh"
   echo "[INFO] 已获取完整项目，开始执行安装..."
   OPENPPP2_BOOTSTRAPPED=1 exec bash "${dir}/install_openppp2.sh" "$@"
@@ -105,16 +126,17 @@ do_install() {
     TK="$(gen_secret 32)"
 
     jq --arg ip "$SERVER_PUBLIC_IP" \
-       --arg bind "$SERVER_BIND_IP" \
-       --argjson kf "$KF" \
-       --arg pk "$PK" \
-       --arg tk "$TK" \
-       '.ip.public=$ip | .ip.interface=$bind
+      --arg bind "$SERVER_BIND_IP" \
+      --argjson kf "$KF" \
+      --arg pk "$PK" \
+      --arg tk "$TK" \
+      '.ip.public=$ip | .ip.interface=$bind
         | .key.kf=$kf | .key["protocol-key"]=$pk | .key["transport-key"]=$tk' \
-       appsettings.base.json > "$APP_CFG_NAME"
+      appsettings.base.json >"$APP_CFG_NAME"
+    chmod 600 "$APP_CFG_NAME" 2>/dev/null || true # 含 protocol-key/transport-key，禁止世界可读
 
     write_compose_server "$IMAGE" "$APP_CFG_NAME"
-    echo "server" > "${APP_DIR}/.role"
+    echo "server" >"${APP_DIR}/.role"
 
     # 写入并打印凭据（客户端需要用到，必须严格一致）
     {
@@ -126,7 +148,7 @@ do_install() {
       echo "# 算法（如客户端默认值不同，请一并对齐）"
       echo "protocol=simd-aes-128-cfb"
       echo "transport=simd-aes-256-cfb"
-    } > "$CREDENTIALS_FILE"
+    } >"$CREDENTIALS_FILE"
     chmod 600 "$CREDENTIALS_FILE" 2>/dev/null || true
 
     echo
@@ -159,12 +181,17 @@ do_install() {
     prompt PK "请输入 protocol-key" ""
     prompt TK "请输入 transport-key" ""
     [[ -n "$PK" && -n "$TK" ]] || die "protocol-key / transport-key 不能为空，否则无法与服务端互通。"
-    [[ "$KF" =~ ^[0-9]+$ ]] || { warn "kf 非数值，按 0 处理（若服务端 kf 非 0，将无法连通）。"; KF=0; }
+    [[ "$KF" =~ ^[0-9]+$ ]] || {
+      warn "kf 非数值，按 0 处理（若服务端 kf 非 0，将无法连通）。"
+      KF=0
+    }
 
     guid="$(gen_guid)"
     netinfo="$(detect_net)"
-    lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
-    nic="${netinfo%%|*}"; gw="${netinfo#*|}"
+    lan="${netinfo%%|*}"
+    netinfo="${netinfo#*|}"
+    nic="${netinfo%%|*}"
+    gw="${netinfo#*|}"
 
     if [[ -z "${lan:-}" || "${lan:-}" =~ ^10\. ]]; then
       warn "自动检测到的 LAN IP 为空或为 10.x（可能是隧道），请手动输入正确的内网 IP。"
@@ -199,15 +226,16 @@ do_install() {
     S_PASS="$(gen_password 20)"
 
     jq --argjson kf "$KF" --arg pk "$PK" --arg tk "$TK" \
-       --arg srv "$SERVER_URI" --arg guid "$guid" --arg lan "$lan" \
-       --argjson hport "$HTTP_PORT" --argjson sport "$SOCKS_PORT" \
-       --arg suser "$S_USER" --arg spass "$S_PASS" \
-       '.key.kf=$kf | .key["protocol-key"]=$pk | .key["transport-key"]=$tk
+      --arg srv "$SERVER_URI" --arg guid "$guid" --arg lan "$lan" \
+      --argjson hport "$HTTP_PORT" --argjson sport "$SOCKS_PORT" \
+      --arg suser "$S_USER" --arg spass "$S_PASS" \
+      '.key.kf=$kf | .key["protocol-key"]=$pk | .key["transport-key"]=$tk
         | .client.server=$srv | .client.guid=$guid
         | .client["http-proxy"].bind=$lan  | .client["http-proxy"].port=$hport
         | .client["socks-proxy"].bind=$lan | .client["socks-proxy"].port=$sport
         | .client["socks-proxy"].username=$suser | .client["socks-proxy"].password=$spass' \
-       appsettings.base.json > "$APP_CFG_NAME"
+      appsettings.base.json >"$APP_CFG_NAME"
+    chmod 600 "$APP_CFG_NAME" 2>/dev/null || true # 含密钥与 SOCKS5 凭据，禁止世界可读
 
     enable_ip_forward_host
 
@@ -219,8 +247,8 @@ do_install() {
     prompt USE_MUX "是否开启 mux？(yes/no)" "no"
     write_compose_client "$IMAGE" "$nic" "$gw" "$MAIN_SERVICE_NAME" "$APP_CFG_NAME" "$tun_name" "$tun_ip" "$tun_gw" "$USE_MUX"
 
-    echo "client" > "${APP_DIR}/.role"
-    echo "$MAIN_SERVICE_NAME" > "${APP_DIR}/.client_main_service"
+    echo "client" >"${APP_DIR}/.role"
+    echo "$MAIN_SERVICE_NAME" >"${APP_DIR}/.client_main_service"
 
     echo
     echo "当前客户端配置信息："
@@ -269,11 +297,11 @@ do_install() {
   if [[ "$ROLE" == "2" ]]; then
     local main_svc
     main_svc="$(cat "${APP_DIR}/.client_main_service" 2>/dev/null || echo openppp2)"
-    health_check_one "$main_svc" "client" "${lan}|${HTTP_PORT}|${SOCKS_PORT}" \
-      || warn "健康检查未通过，请手动检查容器状态（docker logs ${main_svc}）。"
+    health_check_one "$main_svc" "client" "${lan}|${HTTP_PORT}|${SOCKS_PORT}" ||
+      warn "健康检查未通过，请手动检查容器状态（docker logs ${main_svc}）。"
   else
-    health_check_one "openppp2" "server" "${SERVER_PORT:-20000}" \
-      || warn "健康检查未通过，请手动检查容器状态（docker logs openppp2）。"
+    health_check_one "openppp2" "server" "${SERVER_PORT:-20000}" ||
+      warn "健康检查未通过，请手动检查容器状态（docker logs openppp2）。"
   fi
 
   setup_systemd_weekly_update
@@ -291,10 +319,9 @@ do_install() {
   echo "配置目录：${APP_DIR}"
   echo "查看日志：cd ${APP_DIR} && ${COMPOSE_KIND} logs -f <服务名>"
   echo
-  info "安全配置：已使用自定义 seccomp 配置（默认放行 + 显式拒绝高危系统调用，放行 io_uring）"
+  info "安全配置：seccomp 采用 Docker 默认 allowlist 基线（默认拒绝）+ 仅放行 io_uring。"
   info "密钥已随机化：protocol-key / transport-key / SOCKS5 凭据均为本次部署独立生成。"
 }
-
 
 do_uninstall() {
   info "开始卸载 openppp2（不卸载 Docker）..."
@@ -305,14 +332,14 @@ do_uninstall() {
     systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
   fi
   rm -f /etc/systemd/system/openppp2-update.timer \
-        /etc/systemd/system/openppp2-update.service \
-        /usr/local/bin/openppp2-update.sh \
-        /etc/systemd/system/openppp2-logrotate.timer \
-        /etc/systemd/system/openppp2-logrotate.service \
-        /usr/local/bin/openppp2-logrotate.sh \
-        /etc/systemd/system/openppp2-boot.service \
-        /usr/local/bin/openppp2-wait-uptime.sh \
-        /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
+    /etc/systemd/system/openppp2-update.service \
+    /usr/local/bin/openppp2-update.sh \
+    /etc/systemd/system/openppp2-logrotate.timer \
+    /etc/systemd/system/openppp2-logrotate.service \
+    /usr/local/bin/openppp2-logrotate.sh \
+    /etc/systemd/system/openppp2-boot.service \
+    /usr/local/bin/openppp2-wait-uptime.sh \
+    /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
   if has_systemd; then
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi

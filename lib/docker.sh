@@ -15,7 +15,7 @@ ensure_docker_stack() {
     systemctl enable --now docker >/dev/null 2>&1 || true
     # 等待 docker 守护进程就绪（最多 ~15s）
     local i
-    for ((i=0; i<15; i++)); do
+    for ((i = 0; i < 15; i++)); do
       docker info >/dev/null 2>&1 && break
       sleep 1
     done
@@ -32,10 +32,13 @@ install_docker() {
     local tmp_sh
     tmp_sh="$(mktemp)"
     info "尝试通过官方脚本安装 Docker（get.docker.com）..."
-    if curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 15 https://get.docker.com -o "$tmp_sh" \
-       && [[ -s "$tmp_sh" ]] && sh "$tmp_sh"; then
+    if curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 15 https://get.docker.com -o "$tmp_sh" &&
+      [[ -s "$tmp_sh" ]] && sh "$tmp_sh"; then
       rm -f "$tmp_sh"
-      need_cmd docker && { info "Docker 安装成功（官方脚本）。"; return 0; }
+      need_cmd docker && {
+        info "Docker 安装成功（官方脚本）。"
+        return 0
+      }
     fi
     rm -f "$tmp_sh"
     warn "官方脚本安装失败或网络受限，改用发行版软件源..."
@@ -47,13 +50,13 @@ install_docker() {
     DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
     # 优先装 compose v2 插件；装不上再退回 docker-compose（v1）
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      docker.io docker-compose-v2 >/dev/null 2>&1 \
-    || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      docker.io docker-compose-plugin >/dev/null 2>&1 \
-    || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      docker.io docker-compose >/dev/null 2>&1 \
-    || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      docker.io >/dev/null 2>&1 || true
+      docker.io docker-compose-v2 >/dev/null 2>&1 ||
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        docker.io docker-compose-plugin >/dev/null 2>&1 ||
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        docker.io docker-compose >/dev/null 2>&1 ||
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        docker.io >/dev/null 2>&1 || true
     if need_cmd docker; then
       info "Docker 安装成功（发行版软件源）。"
       return 0
@@ -63,10 +66,14 @@ install_docker() {
 
   # 渠道 3：dnf / yum（RHEL 系）
   if need_cmd dnf || need_cmd yum; then
-    local pm; pm="$(need_cmd dnf && echo dnf || echo yum)"
+    local pm
+    pm="$(need_cmd dnf && echo dnf || echo yum)"
     info "尝试通过 ${pm} 安装 docker..."
     "$pm" install -y docker >/dev/null 2>&1 || true
-    need_cmd docker && { info "Docker 安装成功（${pm}）。"; return 0; }
+    need_cmd docker && {
+      info "Docker 安装成功（${pm}）。"
+      return 0
+    }
   fi
 
   return 1
@@ -75,19 +82,22 @@ install_docker() {
 # 设置 COMPOSE_KIND
 detect_compose() {
   if docker compose version >/dev/null 2>&1; then
-    COMPOSE_KIND="docker compose"; return 0
+    COMPOSE_KIND="docker compose"
+    return 0
   elif need_cmd docker-compose; then
-    COMPOSE_KIND="docker-compose"; return 0
+    COMPOSE_KIND="docker-compose"
+    return 0
   fi
-  COMPOSE_KIND=""; return 1
+  COMPOSE_KIND=""
+  return 1
 }
 
 # compose 封装：始终带上 -f $COMPOSE_FILE，并在 APP_DIR 下执行
 # （security_opt 的 seccomp 相对路径按 CLI 的 CWD 解析，必须是 APP_DIR）
 compose() {
   case "$COMPOSE_KIND" in
-    "docker compose") ( cd "$APP_DIR" && docker compose -f "$COMPOSE_FILE" "$@" ) ;;
-    "docker-compose")  ( cd "$APP_DIR" && docker-compose -f "$COMPOSE_FILE" "$@" ) ;;
+    "docker compose") (cd "$APP_DIR" && docker compose -f "$COMPOSE_FILE" "$@") ;;
+    "docker-compose") (cd "$APP_DIR" && docker-compose -f "$COMPOSE_FILE" "$@") ;;
     *) die "Compose 未检测到，无法执行：$*" ;;
   esac
 }
@@ -102,8 +112,8 @@ download_base_cfg() {
     cp "$local_copy" "${APP_DIR}/appsettings.base.json"
   else
     info "下载基准配置：$url"
-    curl_retry -fsSL "$url" -o "${APP_DIR}/appsettings.base.json" \
-      || die "基准配置下载失败：$url"
+    curl_retry -fsSL "$url" -o "${APP_DIR}/appsettings.base.json" ||
+      die "基准配置下载失败：$url"
   fi
   # 同时把本地 Dockerfile 复制进 APP_DIR，供兜底构建使用
   [[ -f "${SCRIPT_DIR}/Dockerfile" ]] && cp "${SCRIPT_DIR}/Dockerfile" "${APP_DIR}/Dockerfile" || true
@@ -112,16 +122,22 @@ download_base_cfg() {
 # ---------- Docker HTTP 代理 ----------
 setup_docker_proxy() {
   local ip="$1" port="$2"
-  [[ -n "$ip" && -n "$port" ]] || { warn "代理 IP/端口为空。"; return 1; }
+  [[ -n "$ip" && -n "$port" ]] || {
+    warn "代理 IP/端口为空。"
+    return 1
+  }
   mkdir -p "$(dirname "$DOCKER_PROXY_DROPIN")"
-  cat > "$DOCKER_PROXY_DROPIN" <<EOF
+  cat >"$DOCKER_PROXY_DROPIN" <<EOF
 [Service]
 Environment="HTTP_PROXY=http://${ip}:${port}"
 Environment="HTTPS_PROXY=http://${ip}:${port}"
 Environment="NO_PROXY=localhost,127.0.0.1"
 EOF
   if has_systemd; then
-    systemctl daemon-reload && systemctl restart docker || { warn "重启 Docker 失败。"; return 1; }
+    systemctl daemon-reload && systemctl restart docker || {
+      warn "重启 Docker 失败。"
+      return 1
+    }
   fi
   info "已为 Docker 配置 HTTP 代理 ${ip}:${port}"
   return 0
@@ -149,11 +165,13 @@ remove_docker_proxy() {
 ensure_image() {
   local image="$1"
   if docker image inspect "$image" >/dev/null 2>&1; then
-    info "镜像已存在于本地：$image"; return 0
+    info "镜像已存在于本地：$image"
+    return 0
   fi
   info "尝试拉取镜像：$image"
   if docker pull "$image" >/dev/null 2>&1; then
-    info "拉取成功：$image"; return 0
+    info "拉取成功：$image"
+    return 0
   fi
   warn "拉取失败：$image"
   warn "（GHCR 包可能未公开发布，或网络不通）将改为在本机用 Dockerfile 构建。"
@@ -165,16 +183,23 @@ build_image_local() {
   local df="${APP_DIR}/Dockerfile"
   [[ -f "$df" ]] || df="${SCRIPT_DIR}/Dockerfile"
   if [[ ! -f "$df" ]]; then
-    info "本地无 Dockerfile，尝试下载..."
-    curl_retry -fsSL "https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/Dockerfile" \
+    info "本地无 Dockerfile，尝试下载（固定 tag ${REPO_REF}）..."
+    curl_retry -fsSL "${REPO_RAW_BASE}/Dockerfile" \
       -o "${APP_DIR}/Dockerfile" || die "无法获取 Dockerfile，本地构建中止。"
     df="${APP_DIR}/Dockerfile"
   fi
 
-  local tag zipurl
-  tag="$(curl_retry -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null \
-        | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[: ]*"([^"]+)".*/\1/')"
+  local tag zipurl zipsha=""
+  tag="$(curl_retry -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null |
+    grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[: ]*"([^"]+)".*/\1/')"
   [[ -n "$tag" ]] || tag="$FALLBACK_UPSTREAM_TAG"
+  # 仅当构建用的是我们内置了 SHA256 的固定版本时才校验完整性；
+  # 若用的是动态查询到的"最新版"，其 sha 未知，留空让 Dockerfile 跳过校验并告警。
+  if [[ "$tag" == "$FALLBACK_UPSTREAM_TAG" ]]; then
+    zipsha="$FALLBACK_UPSTREAM_SHA256"
+  else
+    warn "本地构建使用上游最新版 ${tag}，其 zip SHA256 未知，将跳过完整性校验。"
+  fi
 
   # 本项目仅支持 amd64（x86_64）
   if [[ "$(uname -m)" != "x86_64" && "$(uname -m)" != "amd64" ]]; then
@@ -185,8 +210,9 @@ build_image_local() {
   info "本地构建镜像 ${image}（上游 ${tag}）..."
   docker build -t "$image" \
     --build-arg "OPENPPP2_ZIP_URL=${zipurl}" \
-    -f "$df" "$(dirname "$df")" \
-    || die "本地构建失败，请检查网络能否访问 github.com 下载 release。"
+    --build-arg "OPENPPP2_ZIP_SHA256=${zipsha}" \
+    -f "$df" "$(dirname "$df")" ||
+    die "本地构建失败，请检查网络能否访问 github.com 下载 release。"
   info "本地构建完成：$image"
 }
 
@@ -202,7 +228,7 @@ health_check_one() {
   local egress_url="https://ifconfig.me"
 
   # 1) 等待容器 Running
-  for ((i=0; i<HEALTH_RETRIES; i++)); do
+  for ((i = 0; i < HEALTH_RETRIES; i++)); do
     state="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo false)"
     [[ "$state" == "true" ]] && break
     sleep "$HEALTH_INTERVAL"
@@ -214,13 +240,19 @@ health_check_one() {
 
   # 2) 若镜像声明了 HEALTHCHECK，等待 healthy
   if docker inspect -f '{{if .State.Health}}yes{{end}}' "$name" 2>/dev/null | grep -q yes; then
-    for ((i=0; i<HEALTH_RETRIES; i++)); do
+    for ((i = 0; i < HEALTH_RETRIES; i++)); do
       health="$(docker inspect -f '{{.State.Health.Status}}' "$name" 2>/dev/null || echo starting)"
       [[ "$health" == "healthy" ]] && break
-      [[ "$health" == "unhealthy" ]] && { warn "容器 HEALTHCHECK 为 unhealthy：$name"; return 1; }
+      [[ "$health" == "unhealthy" ]] && {
+        warn "容器 HEALTHCHECK 为 unhealthy：$name"
+        return 1
+      }
       sleep "$HEALTH_INTERVAL"
     done
-    [[ "$health" == "healthy" ]] || { warn "容器 HEALTHCHECK 未在限定时间内变 healthy：$name"; return 1; }
+    [[ "$health" == "healthy" ]] || {
+      warn "容器 HEALTHCHECK 未在限定时间内变 healthy：$name"
+      return 1
+    }
   fi
 
   # 3) ppp 进程是否存在
@@ -253,9 +285,14 @@ health_check_one() {
       fi
       # 解析 probe = "LAN|HTTP_PORT|SOCKS_PORT"
       local lan hport sport rest
-      lan="${probe%%|*}"; rest="${probe#*|}"
-      hport="${rest%%|*}"; sport="${rest#*|}"
-      need_cmd curl || { info "客户端健康检查通过（容器运行 + ppp 进程 + TUN；宿主机无 curl，跳过出网探测）。"; return 0; }
+      lan="${probe%%|*}"
+      rest="${probe#*|}"
+      hport="${rest%%|*}"
+      sport="${rest#*|}"
+      need_cmd curl || {
+        info "客户端健康检查通过（容器运行 + ppp 进程 + TUN；宿主机无 curl，跳过出网探测）。"
+        return 0
+      }
 
       local ok=1
       # HTTP 代理出网探测

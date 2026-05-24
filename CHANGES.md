@@ -63,7 +63,7 @@
 
 ## 自查发现并修复的额外问题
 
-- **一键安装命令本身不可用**：仓库已是模块化结构（`source lib/*.sh`），但 README 仍教用户只 `curl` 单个 `install_openppp2.sh` 运行，必然因找不到模块而失败。README 已改为 `git clone` / 下载 tar 包获取整个仓库。
+- **一键安装命令**：仓库是模块化结构（`source lib/*.sh`），单独 `curl install_openppp2.sh` 会缺模块。脚本内置 `_bootstrap_if_needed`：检测到缺 `lib/` 时自动下载完整项目 tar 包并重新执行（v2.3.0 起锚定到固定 tag，见下）。README 的一键命令据此说明。
 - **README 对 seccomp 的描述不准确**：实际是"默认放行 + 显式拒绝高危调用"，并非"比 Docker 默认更严格的白名单"。文档已据实更正。
 - **compose 相对路径**：`security_opt: seccomp=./...` 按 CLI 的工作目录解析，`compose()` 封装已确保始终在 `APP_DIR` 下执行。
 - **客户端 TUN 默认名**：上游 Linux 默认 `ppp`，脚本对主实例用 `ppp0`、多实例用 `pppN`，并通过命令行参数显式指定，避免歧义。
@@ -74,7 +74,9 @@
 ## 版本
 
 - config.sh：`SCRIPT_VERSION` 由 `2.1.0` → `2.2.0`
-- 新增文件：`.dockerignore`、`CHANGES.md`，以及设包为 public 的 `build.yml`（仅 amd64）
+- 新增文件：`CHANGES.md`
+
+> 注（v2.3.0 勘误）：2.2.0 文档此处曾提到“设包为 public 的 build.yml / .dockerignore”，但这些文件当时并未实际提交到仓库；CI workflow、`.dockerignore` 等是在 v2.3.0 才真正加入的（见下）。GHCR 包可见性也无法由 workflow 通过 REST API 修改，需在 GHCR 页面一次性手动设为 Public。
 
 ## 已做的校验
 
@@ -108,3 +110,30 @@
 **根因**：`ensure_pkgs` 用 `command -v <名字>` 判断是否已装，但 `ca-certificates`、`iproute2` 是**包名不是命令**，`command -v` 必然失败，于是每次都触发 apt。
 
 **修复**（`lib/core.sh`）：`ensure_pkgs` 改为按**真实命令/文件**判断——`iproute2` 探测 `ip`、`ca-certificates` 探测 `/etc/ssl/certs`；命令已存在则完全跳过 apt（实测：`ip` 与证书目录都在时不再触发任何 apt 调用）。同时补充 `dnf`/`yum` 分支。
+
+---
+
+## v2.3.0 安全与工程化加固
+
+`SCRIPT_VERSION` `2.2.0` → `2.3.0`。
+
+### 第一批：安全 / 一致性
+
+1. **README 与脚本对齐**：README 一键命令改为从**固定 tag**（`v2.3.0`）下载，并据实说明 `_bootstrap_if_needed` 自举逻辑；补充镜像来源、cosign 验签、seccomp 模型、文件权限等说明。同时勘误本文件早先关于 `build.yml` / `.dockerignore` 的不实描述。
+2. **敏感文件权限收紧**：`install_openppp2.sh` 顶部加 `umask 077`（新建文件默认 600 / 目录 700）；并对生成的 `appsettings*.json`（含 `protocol-key`/`transport-key`/SOCKS5 凭据）显式 `chmod 600`；seccomp profile、systemd 备份快照与日志归档同样收紧。
+3. **Dockerfile SHA256 校验**：新增 `OPENPPP2_ZIP_SHA256` build-arg，下载上游 zip 后强制 `sha256sum -c`；留空则告警跳过（仅用于无法预知 sha 的临时构建）。默认值与 CI 解析的最新版均带 sha。
+4. **固定 tag 下载（不再默认 main）**：`OPENPPP2_REF` / `REPO_REF`（默认 `v2.3.0`）统一锚定自举 tar 包、基准配置、兜底 Dockerfile 的下载地址，保证可复现。修正上游兜底版本（旧的 `1.0.0.26016` 资产已 404）为 `1.0.0.26151` 并内置其 sha256。
+5. **seccomp 改为 Docker 默认 allowlist 基线 + io_uring patch**：由原来的「默认放行 + 黑名单」改为上游 moby 默认配置（`SCMP_ACT_ERRNO` 默认拒绝、按 capability 放行的 allowlist），唯一改动是显式放行 `io_uring_setup`/`io_uring_enter`/`io_uring_register`（openppp2 必需，且不在 Docker 默认 allowlist 内）。
+
+### 第二批：工程化
+
+6. **lint + 测试 CI**（`.github/workflows/lint.yml`）：shellcheck（`--severity=warning`，配 `.shellcheckrc`）、shfmt（`-i 2 -ci`）、bats（`tests/unit.bats`，覆盖随机生成/交互提示/seccomp/compose 渲染）。
+7. **镜像构建/扫描**（`.github/workflows/build.yml`）：docker buildx（`linux/amd64`）→ 推送 GHCR；Trivy 扫描镜像（HIGH/CRITICAL，SARIF 上传 code scanning）。
+8. **正式 release**（`.github/workflows/release.yml`）：打 `vX.Y.Z` tag 时自动建 GitHub Release（`--generate-notes`）。
+9. **SBOM + 签名**：buildx 生成 SBOM 与 provenance 证明；cosign keyless（OIDC）对镜像 digest 签名（验签命令见 README）。
+10. **systemd 加固**：自动更新 / 日志轮转脚本加 `flock`（共用 `/run/openppp2.lock` 串行化）；timer 加 `RandomizedDelaySec`（更新 1h、轮转 15min）抖动；更新后的健康门控加入 HEALTHCHECK=healthy 与“非 running 即失败”判定。
+
+### 待人工确认
+
+- **GHCR 可见性**：首次发布后需在包设置里手动改为 Public（GitHub 无改可见性的 REST API），匿名 `docker pull` 才可用。
+- **上游二进制变体**：仓库一直用 `openppp2-linux-amd64-simd.zip`；上游另有 `...-io-uring-simd.zip` 变体。若实测 `-simd` 不启用 io_uring，则 seccomp 的 io_uring patch 只是冗余放行（无害）；若启用则为必需。建议按实际运行确认。

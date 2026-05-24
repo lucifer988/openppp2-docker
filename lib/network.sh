@@ -16,12 +16,13 @@ port_in_use() {
 # random_free_port -> 10000-60000 之间的空闲端口
 random_free_port() {
   local p tries=0
-  while (( tries < 200 )); do
-    p=$(( (RANDOM % 50000) + 10000 ))
+  while ((tries < 200)); do
+    p=$(((RANDOM % 50000) + 10000))
     if ! port_in_use "$p"; then
-      echo "$p"; return 0
+      echo "$p"
+      return 0
     fi
-    tries=$((tries+1))
+    tries=$((tries + 1))
   done
   die "无法在 10000-60000 范围内找到空闲端口。"
 }
@@ -34,7 +35,7 @@ detect_net() {
     local line
     line="$(ip -o route get 1.1.1.1 2>/dev/null | head -n1)"
     nic="$(awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' <<<"$line")"
-    gw="$(awk  '{for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$line")"
+    gw="$(awk '{for(i=1;i<=NF;i++) if($i=="via"){print $(i+1); exit}}' <<<"$line")"
     lan="$(awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' <<<"$line")"
     [[ -z "$gw" ]] && gw="$(ip -o route show default 2>/dev/null | awk '{print $3; exit}')"
     [[ -z "$nic" ]] && nic="$(ip -o route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
@@ -45,7 +46,7 @@ detect_net() {
 # 开启宿主机 IP 转发（client 需要）
 enable_ip_forward_host() {
   info "开启宿主机 IPv4 转发..."
-  cat > /etc/sysctl.d/99-openppp2.conf <<'EOF'
+  cat >/etc/sysctl.d/99-openppp2.conf <<'EOF'
 net.ipv4.ip_forward = 1
 net.ipv4.conf.all.rp_filter = 2
 EOF
