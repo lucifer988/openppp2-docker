@@ -17,6 +17,11 @@ CREDENTIALS_FILE="${APP_DIR}/server-credentials.txt"
 # Docker 镜像
 DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
 
+# 容器日志大小限制（docker json-file 驱动按 max-size 滚动、最多保留 max-file 个，
+# 旧日志自动删除，无需任何手动/交互操作。可用环境变量覆盖）
+LOG_MAX_SIZE="${LOG_MAX_SIZE:-10m}"
+LOG_MAX_FILE="${LOG_MAX_FILE:-3}"
+
 # 上游项目（本地兜底构建时拉取 release zip 用）
 UPSTREAM_REPO="liulilittle/openppp2"
 # 兜底构建时使用的固定上游版本（GHCR 不可用且无法查询最新版时使用）

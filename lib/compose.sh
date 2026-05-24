@@ -30,6 +30,11 @@ services:
     volumes:
       - ./${cfg}:/opt/openppp2/appsettings.json:ro
     command: ["--mode=server"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE}"
+        max-file: "${LOG_MAX_FILE}"
 EOF
   info "已生成服务端 docker-compose.yml"
 }
@@ -63,6 +68,11 @@ render_client_compose() {
     volumes:
       - ./${cfg}:/opt/openppp2/appsettings.json:ro
     command: ["--mode=client","--tun","${tun}","--tun-ip","${tunip}","--tun-gw","${tungw}","--tun-mask","30","--tun-host=no","--nic","${nic}","--ngw","${ngw}"${muxline}]
+    logging:
+      driver: json-file
+      options:
+        max-size: "${LOG_MAX_SIZE}"
+        max-file: "${LOG_MAX_FILE}"
 EOF
     done < "$instfile"
   } > "$COMPOSE_FILE"
