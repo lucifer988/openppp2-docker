@@ -1,0 +1,4 @@
+# 只把构建镜像真正需要的东西送进 build context。
+# Dockerfile 只需要它自己（从上游 release 下载 ppp 二进制），不需要仓库脚本/历史。
+*
+!Dockerfile

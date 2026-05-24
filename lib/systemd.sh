@@ -26,12 +26,20 @@ _write_update_script() {
 #!/usr/bin/env bash
 # openppp2 自动更新（健康检查失败则回滚到旧镜像并恢复配置）
 set -uo pipefail
+umask 077   # 备份快照含密钥配置，禁止世界可读
 APP_DIR="${APP_DIR}"
 COMPOSE_FILE="${COMPOSE_FILE}"
 BACKUP_DIR="${BACKUP_DIR}"
 AUTO_ROLLBACK="${rollback}"
 STACK=/usr/local/bin/openppp2-stack.sh
 LOG() { echo "[\$(date '+%F %T')] \$*"; }
+
+# 串行化：与 logrotate/boot 共用一把锁，避免并发对同一 compose 栈做 pull/recreate 打架。
+LOCK="/run/openppp2.lock"
+exec 9>"\$LOCK" 2>/dev/null || exec 9>/tmp/openppp2.lock
+if command -v flock >/dev/null 2>&1; then
+  flock -n 9 || { LOG "另一个 openppp2 维护任务正在运行，跳过本次更新。"; exit 0; }
+fi
 
 cd "\$APP_DIR" || exit 1
 [[ -f "\$COMPOSE_FILE" ]] || { LOG "无 compose 文件，跳过"; exit 0; }
@@ -65,8 +73,11 @@ health_ok() {
   local ok=1 c st bind hport sport
   local egress_url="https://ifconfig.me"
   for c in "\${CONTS[@]}"; do
-    st="\$(docker inspect -f '{{.State.Running}}' "\$c" 2>/dev/null || echo false)"
-    if [[ "\$st" != "true" ]]; then LOG "不健康：\$c 未运行"; ok=0; continue; fi
+    st="\$(docker inspect -f '{{.State.Status}}' "\$c" 2>/dev/null || echo missing)"
+    if [[ "\$st" != "running" ]]; then LOG "不健康：\$c 状态=\$st（非 running）"; ok=0; continue; fi
+    # 若镜像声明了 HEALTHCHECK，必须为 healthy（starting/unhealthy 都判失败）
+    hs="\$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "\$c" 2>/dev/null || true)"
+    if [[ -n "\$hs" && "\$hs" != "healthy" ]]; then LOG "不健康：\$c HEALTHCHECK=\$hs"; ok=0; continue; fi
     if ! docker exec "\$c" sh -c 'pgrep -x ppp >/dev/null 2>&1 || pidof ppp >/dev/null 2>&1'; then
       LOG "不健康：\$c 内无 ppp 进程"; ok=0; continue
     fi
@@ -188,6 +199,7 @@ _write_logrotate_script() {
 #!/usr/bin/env bash
 # openppp2 服务端 ppp.log 自动轮转（归档 + 重建容器以彻底清零）
 set -uo pipefail
+umask 077   # 归档的日志可能含敏感信息，禁止世界可读
 APP_DIR="${APP_DIR}"
 ARCH_DIR="${APP_DIR}/logs"
 CONTAINER="openppp2"
@@ -196,6 +208,13 @@ MAX_BYTES=\$(( ${PPP_LOG_MAX_MB} * 1024 * 1024 ))
 KEEP=${PPP_LOG_KEEP}
 STACK=/usr/local/bin/openppp2-stack.sh
 LOG() { echo "[\$(date '+%F %T')] \$*"; }
+
+# 串行化：与 update/boot 共用同一把锁，避免轮转重建容器时与更新并发冲突。
+LOCK="/run/openppp2.lock"
+exec 9>"\$LOCK" 2>/dev/null || exec 9>/tmp/openppp2.lock
+if command -v flock >/dev/null 2>&1; then
+  flock -n 9 || { LOG "另一个 openppp2 维护任务正在运行，跳过本次轮转。"; exit 0; }
+fi
 
 # 仅服务端有文件日志
 [[ -f "\$APP_DIR/.role" && "\$(cat "\$APP_DIR/.role" 2>/dev/null)" == "server" ]] || exit 0
@@ -269,6 +288,8 @@ Description=Run openppp2 auto update weekly
 [Timer]
 OnCalendar=${DEFAULT_ONCAL}
 Persistent=true
+# 在计划时间点上随机抖动，避免大量机器同一秒一起拉镜像/重建（惊群、上游限流）。
+RandomizedDelaySec=1h
 
 [Install]
 WantedBy=timers.target
@@ -293,6 +314,7 @@ Description=Run openppp2 ppp.log rotation check
 [Timer]
 OnCalendar=${PPP_LOG_ROTATE_ONCAL}
 Persistent=true
+RandomizedDelaySec=15min
 
 [Install]
 WantedBy=timers.target

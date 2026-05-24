@@ -131,6 +131,7 @@ do_add_client() {
       | .client["socks-proxy"].bind=$lan | .client["socks-proxy"].port=$sport
       | .client["socks-proxy"].username=$suser | .client["socks-proxy"].password=$spass' \
      "$base" > "${APP_DIR}/${cfg}" || die "生成实例配置失败。"
+  chmod 600 "${APP_DIR}/${cfg}" 2>/dev/null || true  # 含密钥与 SOCKS5 凭据，禁止世界可读
 
   # 追加到注册表并重新渲染整份 compose
   echo "${svc}|${cfg}|${tun}|${tunip}|${tungw}|${nic}|${gw}|${HTTP_PORT}|${SOCKS_PORT}|0" >> "$instfile"

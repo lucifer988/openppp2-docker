@@ -165,16 +165,23 @@ build_image_local() {
   local df="${APP_DIR}/Dockerfile"
   [[ -f "$df" ]] || df="${SCRIPT_DIR}/Dockerfile"
   if [[ ! -f "$df" ]]; then
-    info "本地无 Dockerfile，尝试下载..."
-    curl_retry -fsSL "https://raw.githubusercontent.com/lucifer988/openppp2-docker/main/Dockerfile" \
+    info "本地无 Dockerfile，尝试下载（固定 tag ${REPO_REF}）..."
+    curl_retry -fsSL "${REPO_RAW_BASE}/Dockerfile" \
       -o "${APP_DIR}/Dockerfile" || die "无法获取 Dockerfile，本地构建中止。"
     df="${APP_DIR}/Dockerfile"
   fi
 
-  local tag zipurl
+  local tag zipurl zipsha=""
   tag="$(curl_retry -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null \
         | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[: ]*"([^"]+)".*/\1/')"
   [[ -n "$tag" ]] || tag="$FALLBACK_UPSTREAM_TAG"
+  # 仅当构建用的是我们内置了 SHA256 的固定版本时才校验完整性；
+  # 若用的是动态查询到的"最新版"，其 sha 未知，留空让 Dockerfile 跳过校验并告警。
+  if [[ "$tag" == "$FALLBACK_UPSTREAM_TAG" ]]; then
+    zipsha="$FALLBACK_UPSTREAM_SHA256"
+  else
+    warn "本地构建使用上游最新版 ${tag}，其 zip SHA256 未知，将跳过完整性校验。"
+  fi
 
   # 本项目仅支持 amd64（x86_64）
   if [[ "$(uname -m)" != "x86_64" && "$(uname -m)" != "amd64" ]]; then
@@ -185,6 +192,7 @@ build_image_local() {
   info "本地构建镜像 ${image}（上游 ${tag}）..."
   docker build -t "$image" \
     --build-arg "OPENPPP2_ZIP_URL=${zipurl}" \
+    --build-arg "OPENPPP2_ZIP_SHA256=${zipsha}" \
     -f "$df" "$(dirname "$df")" \
     || die "本地构建失败，请检查网络能否访问 github.com 下载 release。"
   info "本地构建完成：$image"
