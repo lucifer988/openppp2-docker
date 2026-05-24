@@ -179,6 +179,67 @@ WantedBy=multi-user.target
 EOF
 }
 
+# 生成服务端 ppp.log 轮转脚本：
+#   openppp2 以 O_RDWR（非 append）持有 ppp.log 句柄，原地截断会产生稀疏文件，
+#   故超过阈值时「压缩归档到宿主机 + 重建容器（全新可写层）」彻底清零，再清理旧归档。
+#   仅服务端写文件日志；客户端 .role!=server 时脚本直接退出。
+_write_logrotate_script() {
+  cat > /usr/local/bin/openppp2-logrotate.sh <<EOF
+#!/usr/bin/env bash
+# openppp2 服务端 ppp.log 自动轮转（归档 + 重建容器以彻底清零）
+set -uo pipefail
+APP_DIR="${APP_DIR}"
+ARCH_DIR="${APP_DIR}/logs"
+CONTAINER="openppp2"
+LOG_PATH="/opt/openppp2/ppp.log"
+MAX_BYTES=\$(( ${PPP_LOG_MAX_MB} * 1024 * 1024 ))
+KEEP=${PPP_LOG_KEEP}
+STACK=/usr/local/bin/openppp2-stack.sh
+LOG() { echo "[\$(date '+%F %T')] \$*"; }
+
+# 仅服务端有文件日志
+[[ -f "\$APP_DIR/.role" && "\$(cat "\$APP_DIR/.role" 2>/dev/null)" == "server" ]] || exit 0
+command -v docker >/dev/null 2>&1 || exit 0
+docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "\$CONTAINER" || exit 0
+
+# 取容器内 ppp.log 当前大小（不存在或异常按 0 处理）
+size="\$(docker exec "\$CONTAINER" sh -c "wc -c < '\$LOG_PATH' 2>/dev/null" 2>/dev/null || echo 0)"
+size="\${size//[^0-9]/}"; size="\${size:-0}"
+if (( size <= MAX_BYTES )); then
+  exit 0
+fi
+
+mkdir -p "\$ARCH_DIR"
+TS="\$(date +%Y%m%d_%H%M%S)"
+ARCHIVE="\$ARCH_DIR/ppp-\${TS}.log.gz"
+LOG "ppp.log 已达 \${size} 字节（阈值 \${MAX_BYTES}），归档到 \${ARCHIVE} 并重建容器..."
+
+# 1) 压缩归档到宿主机
+if ! docker exec "\$CONTAINER" sh -c "cat '\$LOG_PATH'" 2>/dev/null | gzip -c > "\$ARCHIVE"; then
+  LOG "归档失败，放弃本次轮转（不重建容器）。"
+  rm -f "\$ARCHIVE" 2>/dev/null || true
+  exit 1
+fi
+
+# 2) 重建容器 → 全新可写层 → ppp.log 彻底清零（openppp2 重新打开文件，几秒内自动拉起）
+cd "\$APP_DIR" || exit 1
+if ! "\$STACK" up -d --force-recreate --remove-orphans; then
+  LOG "重建容器失败，请手动检查（归档已保留：\${ARCHIVE}）。"
+  exit 1
+fi
+
+# 3) 只保留最近 KEEP 份归档，其余删除
+pruned=0
+while IFS= read -r f; do
+  [[ -n "\$f" ]] || continue
+  rm -f "\$f" 2>/dev/null && pruned=\$(( pruned + 1 ))
+done < <(ls -1t "\$ARCH_DIR"/ppp-*.log.gz 2>/dev/null | tail -n +\$(( KEEP + 1 )))
+(( pruned > 0 )) && LOG "已清理 \${pruned} 份旧归档，保留最近 \${KEEP} 份。"
+LOG "ppp.log 轮转完成。"
+EOF
+  chmod +x /usr/local/bin/openppp2-logrotate.sh
+}
+
 setup_systemd_weekly_update() {
   if ! has_systemd; then
     warn "无 systemd，跳过自动更新/开机启动配置。"
@@ -188,6 +249,7 @@ setup_systemd_weekly_update() {
 
   _write_stack_helper
   _write_update_script
+  _write_logrotate_script
 
   cat > /etc/systemd/system/openppp2-update.service <<EOF
 [Unit]
@@ -212,6 +274,30 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+  # 服务端 ppp.log 自动轮转（service + timer）
+  cat > /etc/systemd/system/openppp2-logrotate.service <<EOF
+[Unit]
+Description=openppp2 server ppp.log rotation (archive + recreate)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openppp2-logrotate.sh
+EOF
+
+  cat > /etc/systemd/system/openppp2-logrotate.timer <<EOF
+[Unit]
+Description=Run openppp2 ppp.log rotation check
+
+[Timer]
+OnCalendar=${PPP_LOG_ROTATE_ONCAL}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
   # 开机延迟启动（可选）
   if [[ "${DEFAULT_BOOT_DELAY}" -gt 0 ]]; then
     _write_boot_service
@@ -219,9 +305,11 @@ EOF
 
   systemctl daemon-reload
   systemctl enable --now openppp2-update.timer >/dev/null 2>&1 || true
+  systemctl enable --now openppp2-logrotate.timer >/dev/null 2>&1 || true
   if [[ "${DEFAULT_BOOT_DELAY}" -gt 0 ]]; then
     systemctl enable openppp2-boot.service >/dev/null 2>&1 || true
   fi
 
   info "已配置每周自动更新（${DEFAULT_ONCAL}），失败自动回滚：${AUTO_ROLLBACK}"
+  info "已配置服务端 ppp.log 自动轮转（检查频率 ${PPP_LOG_ROTATE_ONCAL}，超过 ${PPP_LOG_MAX_MB}MB 归档+重建，保留 ${PPP_LOG_KEEP} 份）"
 }

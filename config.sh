@@ -22,6 +22,13 @@ DEFAULT_IMAGE="ghcr.io/lucifer988/openppp2:latest"
 LOG_MAX_SIZE="${LOG_MAX_SIZE:-10m}"
 LOG_MAX_FILE="${LOG_MAX_FILE:-3}"
 
+# 服务端 ppp.log 文件日志的自动轮转（systemd 定时检查；客户端不写文件日志，不涉及）
+#   openppp2 一直占着该文件句柄且非 append 写入，原地截断会留下稀疏文件，
+#   因此用「归档 + 重建容器」的方式彻底清零（重建容器 = 全新可写层 = ppp.log 归零）。
+PPP_LOG_MAX_MB="${PPP_LOG_MAX_MB:-200}"            # ppp.log 超过此大小(MB)即归档并重建容器
+PPP_LOG_KEEP="${PPP_LOG_KEEP:-5}"                  # 宿主机保留的历史归档份数，超出自动删除
+PPP_LOG_ROTATE_ONCAL="${PPP_LOG_ROTATE_ONCAL:-daily}"  # 检查频率（systemd OnCalendar 语法）
+
 # 上游项目（本地兜底构建时拉取 release zip 用）
 UPSTREAM_REPO="liulilittle/openppp2"
 # 兜底构建时使用的固定上游版本（GHCR 不可用且无法查询最新版时使用）

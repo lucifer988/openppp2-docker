@@ -301,11 +301,15 @@ do_uninstall() {
 
   if has_systemd; then
     systemctl disable --now openppp2-update.timer >/dev/null 2>&1 || true
+    systemctl disable --now openppp2-logrotate.timer >/dev/null 2>&1 || true
     systemctl disable --now openppp2-boot.service >/dev/null 2>&1 || true
   fi
   rm -f /etc/systemd/system/openppp2-update.timer \
         /etc/systemd/system/openppp2-update.service \
         /usr/local/bin/openppp2-update.sh \
+        /etc/systemd/system/openppp2-logrotate.timer \
+        /etc/systemd/system/openppp2-logrotate.service \
+        /usr/local/bin/openppp2-logrotate.sh \
         /etc/systemd/system/openppp2-boot.service \
         /usr/local/bin/openppp2-wait-uptime.sh \
         /usr/local/bin/openppp2-stack.sh >/dev/null 2>&1 || true
