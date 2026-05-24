@@ -19,7 +19,9 @@ generate_seccomp_profile() {
   local out="$1"
   info "生成 seccomp 安全策略（Docker 默认 allowlist 基线 + io_uring patch）：$out"
   # 以 600 创建，避免世界可读（内容本身非机密，但与其它敏感文件统一收紧权限）
-  ( umask 077; cat > "$out" <<'OPENPPP2_SECCOMP_EOF'
+  (
+    umask 077
+    cat >"$out" <<'OPENPPP2_SECCOMP_EOF'
 {
   "defaultAction": "SCMP_ACT_ERRNO",
   "defaultErrnoRet": 1,

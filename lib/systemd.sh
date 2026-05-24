@@ -4,7 +4,7 @@
 # 生成一个独立可执行的 stack 助手（boot/update 复用，避免依赖 lib）
 _write_stack_helper() {
   local kind="$COMPOSE_KIND"
-  cat > /usr/local/bin/openppp2-stack.sh <<EOF
+  cat >/usr/local/bin/openppp2-stack.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 APP_DIR="${APP_DIR}"
@@ -22,7 +22,7 @@ EOF
 # 生成带回滚的更新脚本
 _write_update_script() {
   local rollback="$AUTO_ROLLBACK"
-  cat > /usr/local/bin/openppp2-update.sh <<EOF
+  cat >/usr/local/bin/openppp2-update.sh <<EOF
 #!/usr/bin/env bash
 # openppp2 自动更新（健康检查失败则回滚到旧镜像并恢复配置）
 set -uo pipefail
@@ -161,7 +161,7 @@ EOF
 
 _write_boot_service() {
   local delay="$DEFAULT_BOOT_DELAY"
-  cat > /usr/local/bin/openppp2-wait-uptime.sh <<EOF
+  cat >/usr/local/bin/openppp2-wait-uptime.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 TARGET="${delay}"
@@ -174,7 +174,7 @@ exec /usr/local/bin/openppp2-stack.sh up -d --remove-orphans
 EOF
   chmod +x /usr/local/bin/openppp2-wait-uptime.sh
 
-  cat > /etc/systemd/system/openppp2-boot.service <<EOF
+  cat >/etc/systemd/system/openppp2-boot.service <<EOF
 [Unit]
 Description=openppp2 delayed boot start
 After=docker.service network-online.target
@@ -195,7 +195,7 @@ EOF
 #   故超过阈值时「压缩归档到宿主机 + 重建容器（全新可写层）」彻底清零，再清理旧归档。
 #   仅服务端写文件日志；客户端 .role!=server 时脚本直接退出。
 _write_logrotate_script() {
-  cat > /usr/local/bin/openppp2-logrotate.sh <<EOF
+  cat >/usr/local/bin/openppp2-logrotate.sh <<EOF
 #!/usr/bin/env bash
 # openppp2 服务端 ppp.log 自动轮转（归档 + 重建容器以彻底清零）
 set -uo pipefail
@@ -270,7 +270,7 @@ setup_systemd_weekly_update() {
   _write_update_script
   _write_logrotate_script
 
-  cat > /etc/systemd/system/openppp2-update.service <<EOF
+  cat >/etc/systemd/system/openppp2-update.service <<EOF
 [Unit]
 Description=openppp2 auto update (with health-gated rollback)
 After=docker.service network-online.target
@@ -281,7 +281,7 @@ Type=oneshot
 ExecStart=/usr/local/bin/openppp2-update.sh
 EOF
 
-  cat > /etc/systemd/system/openppp2-update.timer <<EOF
+  cat >/etc/systemd/system/openppp2-update.timer <<EOF
 [Unit]
 Description=Run openppp2 auto update weekly
 
@@ -296,7 +296,7 @@ WantedBy=timers.target
 EOF
 
   # 服务端 ppp.log 自动轮转（service + timer）
-  cat > /etc/systemd/system/openppp2-logrotate.service <<EOF
+  cat >/etc/systemd/system/openppp2-logrotate.service <<EOF
 [Unit]
 Description=openppp2 server ppp.log rotation (archive + recreate)
 After=docker.service
@@ -307,7 +307,7 @@ Type=oneshot
 ExecStart=/usr/local/bin/openppp2-logrotate.sh
 EOF
 
-  cat > /etc/systemd/system/openppp2-logrotate.timer <<EOF
+  cat >/etc/systemd/system/openppp2-logrotate.timer <<EOF
 [Unit]
 Description=Run openppp2 ppp.log rotation check
 

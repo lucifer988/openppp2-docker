@@ -17,8 +17,8 @@ _read_shared_keys_from_existing() {
   local f kf pk tk
   for f in "$APP_DIR"/appsettings*.json; do
     [[ -e "$f" ]] || continue
-    kf="$(jq -r '.key.kf // empty'           "$f" 2>/dev/null)"
-    pk="$(jq -r '.key["protocol-key"] // empty'  "$f" 2>/dev/null)"
+    kf="$(jq -r '.key.kf // empty' "$f" 2>/dev/null)"
+    pk="$(jq -r '.key["protocol-key"] // empty' "$f" 2>/dev/null)"
     tk="$(jq -r '.key["transport-key"] // empty' "$f" 2>/dev/null)"
     if [[ -n "$pk" && -n "$tk" ]]; then
       echo "${kf}|${pk}|${tk}"
@@ -33,7 +33,8 @@ _read_shared_keys_from_existing() {
 # 已有实例服务名形如 openppp2 / openppp2-2 / openppp2-3...
 _next_instance_index() {
   local max=1 svc rest n
-  local instfile; instfile="$(_instances_file)"
+  local instfile
+  instfile="$(_instances_file)"
   if [[ -f "$instfile" ]]; then
     while IFS='|' read -r svc rest; do
       [[ -z "$svc" ]] && continue
@@ -42,10 +43,10 @@ _next_instance_index() {
       else
         n=1
       fi
-      (( n > max )) && max="$n"
-    done < "$instfile"
+      ((n > max)) && max="$n"
+    done <"$instfile"
   fi
-  echo $(( max + 1 ))
+  echo $((max + 1))
 }
 
 # ---------- 3) 新增客户端实例 ----------
@@ -55,7 +56,8 @@ do_add_client() {
   ensure_pkgs jq curl openssl iproute2
   detect_compose >/dev/null 2>&1 || true
 
-  local instfile; instfile="$(_instances_file)"
+  local instfile
+  instfile="$(_instances_file)"
   if [[ ! -f "$instfile" ]]; then
     die "未发现客户端实例注册表（${instfile}）。新增实例仅适用于已部署为客户端的主机。"
   fi
@@ -88,8 +90,10 @@ do_add_client() {
   # 共享密钥：从已有实例复用，复用不到则提示粘贴服务端凭据
   local sk kf pk tk
   sk="$(_read_shared_keys_from_existing || true)"
-  kf="${sk%%|*}"; sk="${sk#*|}"
-  pk="${sk%%|*}"; tk="${sk#*|}"
+  kf="${sk%%|*}"
+  sk="${sk#*|}"
+  pk="${sk%%|*}"
+  tk="${sk#*|}"
   if [[ -z "$pk" || -z "$tk" ]]; then
     warn "未能从已有实例读取共享密钥，请粘贴服务端的密钥（必须与服务端完全一致）。"
     prompt kf "请输入 key.kf（服务端 server-credentials.txt 中的数值）" ""
@@ -103,11 +107,13 @@ do_add_client() {
   # 网络探测
   local lan nic gw netinfo
   netinfo="$(detect_net)"
-  lan="${netinfo%%|*}"; netinfo="${netinfo#*|}"
-  nic="${netinfo%%|*}"; gw="${netinfo#*|}"
+  lan="${netinfo%%|*}"
+  netinfo="${netinfo#*|}"
+  nic="${netinfo%%|*}"
+  gw="${netinfo#*|}"
   [[ -n "$lan" && ! "$lan" =~ ^10\. ]] || prompt lan "请输入客户端内网 IP（用于 http/socks bind）" "127.0.0.1"
   [[ -n "$nic" ]] || prompt nic "请输入默认网卡名（例如 eth0、ens3）" "$DEFAULT_CLIENT_NIC"
-  [[ -n "$gw" ]]  || prompt gw  "请输入默认网关（例如 192.168.1.1）" ""
+  [[ -n "$gw" ]] || prompt gw "请输入默认网关（例如 192.168.1.1）" ""
   [[ -n "$gw" ]] || die "网关地址不能为空。"
 
   # 端口与本地 SOCKS 凭据（每实例随机）
@@ -120,31 +126,31 @@ do_add_client() {
 
   # 生成实例配置
   jq --argjson kf "${kf:-0}" \
-     --arg pk "$pk" --arg tk "$tk" \
-     --arg srv "$SERVER_URI" --arg guid "$guid" --arg lan "$lan" \
-     --argjson hport "$HTTP_PORT" --argjson sport "$SOCKS_PORT" \
-     --arg suser "$s_user" --arg spass "$s_pass" \
-     '.key.kf=$kf
+    --arg pk "$pk" --arg tk "$tk" \
+    --arg srv "$SERVER_URI" --arg guid "$guid" --arg lan "$lan" \
+    --argjson hport "$HTTP_PORT" --argjson sport "$SOCKS_PORT" \
+    --arg suser "$s_user" --arg spass "$s_pass" \
+    '.key.kf=$kf
       | .key["protocol-key"]=$pk | .key["transport-key"]=$tk
       | .client.server=$srv | .client.guid=$guid
       | .client["http-proxy"].bind=$lan  | .client["http-proxy"].port=$hport
       | .client["socks-proxy"].bind=$lan | .client["socks-proxy"].port=$sport
       | .client["socks-proxy"].username=$suser | .client["socks-proxy"].password=$spass' \
-     "$base" > "${APP_DIR}/${cfg}" || die "生成实例配置失败。"
-  chmod 600 "${APP_DIR}/${cfg}" 2>/dev/null || true  # 含密钥与 SOCKS5 凭据，禁止世界可读
+    "$base" >"${APP_DIR}/${cfg}" || die "生成实例配置失败。"
+  chmod 600 "${APP_DIR}/${cfg}" 2>/dev/null || true # 含密钥与 SOCKS5 凭据，禁止世界可读
 
   # 追加到注册表并重新渲染整份 compose
-  echo "${svc}|${cfg}|${tun}|${tunip}|${tungw}|${nic}|${gw}|${HTTP_PORT}|${SOCKS_PORT}|0" >> "$instfile"
+  echo "${svc}|${cfg}|${tun}|${tunip}|${tungw}|${nic}|${gw}|${HTTP_PORT}|${SOCKS_PORT}|0" >>"$instfile"
   render_client_compose
 
   enable_ip_forward_host
 
   info "拉取/构建镜像并启动新实例..."
   ensure_image "$IMAGE"
-  ( cd "$APP_DIR" && compose up -d --remove-orphans )
+  (cd "$APP_DIR" && compose up -d --remove-orphans)
 
-  health_check_one "$svc" "client" "${lan}|${HTTP_PORT}|${SOCKS_PORT}" \
-    || warn "实例 ${svc} 健康检查未通过，可稍后用 docker logs ${svc} 查看。"
+  health_check_one "$svc" "client" "${lan}|${HTTP_PORT}|${SOCKS_PORT}" ||
+    warn "实例 ${svc} 健康检查未通过，可稍后用 docker logs ${svc} 查看。"
 
   echo
   echo "===== 新增实例完成 ====="
@@ -158,12 +164,17 @@ do_add_client() {
 # ---------- 4) 查看客户端配置和代理信息 ----------
 do_show_info() {
   [[ -d "$APP_DIR" ]] || die "未发现安装目录：$APP_DIR"
-  local instfile; instfile="$(_instances_file)"
+  local instfile
+  instfile="$(_instances_file)"
   if [[ ! -f "$instfile" ]]; then
     # 可能是服务端，或单文件客户端
     if [[ -f "${APP_DIR}/.role" && "$(cat "${APP_DIR}/.role")" == "server" ]]; then
       echo "当前主机角色：服务端（server）"
-      [[ -f "$CREDENTIALS_FILE" ]] && { echo "服务端凭据（请妥善保存，客户端需要用到）："; echo; cat "$CREDENTIALS_FILE"; }
+      [[ -f "$CREDENTIALS_FILE" ]] && {
+        echo "服务端凭据（请妥善保存，客户端需要用到）："
+        echo
+        cat "$CREDENTIALS_FILE"
+      }
       return 0
     fi
     die "未发现客户端实例注册表（${instfile}）。"
@@ -193,14 +204,15 @@ do_show_info() {
       st="$(docker inspect -f '{{.State.Status}}' "$svc" 2>/dev/null || echo 未创建)"
       echo "  容器状态 ：${st}"
     fi
-  done < "$instfile"
+  done <"$instfile"
   echo
 }
 
 # ---------- 5) 删除客户端实例 ----------
 do_delete_client() {
   [[ -d "$APP_DIR" ]] || die "未发现安装目录：$APP_DIR"
-  local instfile; instfile="$(_instances_file)"
+  local instfile
+  instfile="$(_instances_file)"
   [[ -f "$instfile" ]] || die "未发现客户端实例注册表（${instfile}）。"
   detect_compose >/dev/null 2>&1 || true
 
@@ -210,21 +222,21 @@ do_delete_client() {
   while IFS='|' read -r svc rest; do
     [[ -z "$svc" ]] && continue
     svcs+=("$svc")
-  done < "$instfile"
+  done <"$instfile"
 
   [[ ${#svcs[@]} -gt 0 ]] || die "没有可删除的实例。"
 
   echo "请选择要删除的实例："
   for i in "${!svcs[@]}"; do
-    echo "  $((i+1))) ${svcs[$i]}"
+    echo "  $((i + 1))) ${svcs[$i]}"
   done
 
   local pick
   prompt pick "请输入序号（1-${#svcs[@]}）" "1"
-  [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#svcs[@]} )) \
-    || die "序号无效。"
+  [[ "$pick" =~ ^[0-9]+$ ]] && ((pick >= 1 && pick <= ${#svcs[@]})) ||
+    die "序号无效。"
 
-  local target="${svcs[$((pick-1))]}"
+  local target="${svcs[$((pick - 1))]}"
   info "将删除实例：${target}"
 
   # 取该实例的配置文件名
@@ -234,7 +246,7 @@ do_delete_client() {
       tcfg="${rest%%|*}"
       break
     fi
-  done < "$instfile"
+  done <"$instfile"
 
   # 删除前先备份 compose、注册表与该实例配置（保守起见，便于回滚）
   local ts snap
@@ -252,8 +264,9 @@ do_delete_client() {
   fi
 
   # 从注册表移除该行
-  local tmp; tmp="$(mktemp)"
-  grep -v -E "^${target}\|" "$instfile" > "$tmp" || true
+  local tmp
+  tmp="$(mktemp)"
+  grep -v -E "^${target}\|" "$instfile" >"$tmp" || true
   mv "$tmp" "$instfile"
 
   # 删除其配置文件
@@ -262,10 +275,10 @@ do_delete_client() {
   # 若仍有实例则重渲染并应用；否则保留空 compose
   if [[ -s "$instfile" ]]; then
     render_client_compose
-    ( cd "$APP_DIR" && compose up -d --remove-orphans ) || true
+    (cd "$APP_DIR" && compose up -d --remove-orphans) || true
   else
     warn "已删除最后一个实例，注册表为空。"
-    : > "$COMPOSE_FILE"
+    : >"$COMPOSE_FILE"
   fi
 
   info "实例 ${target} 已删除。"

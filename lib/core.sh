@@ -3,14 +3,23 @@
 
 # ---------- 颜色与日志 ----------
 if [[ -t 1 ]]; then
-  _C_RED=$'\033[0;31m'; _C_GRN=$'\033[0;32m'; _C_YLW=$'\033[0;33m'; _C_RST=$'\033[0m'
+  _C_RED=$'\033[0;31m'
+  _C_GRN=$'\033[0;32m'
+  _C_YLW=$'\033[0;33m'
+  _C_RST=$'\033[0m'
 else
-  _C_RED=""; _C_GRN=""; _C_YLW=""; _C_RST=""
+  _C_RED=""
+  _C_GRN=""
+  _C_YLW=""
+  _C_RST=""
 fi
 
 info() { echo "${_C_GRN}[INFO]${_C_RST} $*"; }
 warn() { echo "${_C_YLW}[WARN]${_C_RST} $*" >&2; }
-die()  { echo "${_C_RED}[ERROR]${_C_RST} $*" >&2; exit 1; }
+die() {
+  echo "${_C_RED}[ERROR]${_C_RST} $*" >&2
+  exit 1
+}
 
 # ---------- 命令/环境检查 ----------
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -48,7 +57,7 @@ prompt_port() {
   local __pp_var="$1" __pp_msg="$2" __pp_def="${3:-}" __pp_val=""
   while true; do
     prompt __pp_val "$__pp_msg" "$__pp_def"
-    if [[ "$__pp_val" =~ ^[0-9]+$ ]] && (( __pp_val >= 1 && __pp_val <= 65535 )); then
+    if [[ "$__pp_val" =~ ^[0-9]+$ ]] && ((__pp_val >= 1 && __pp_val <= 65535)); then
       printf -v "$__pp_var" '%s' "$__pp_val"
       return 0
     fi
@@ -73,7 +82,7 @@ gen_guid() {
     g="$(cat /proc/sys/kernel/random/uuid)"
   else
     g="$(printf '%08x-%04x-%04x-%04x-%012x' \
-      $((RANDOM*RANDOM)) $((RANDOM)) $((RANDOM)) $((RANDOM)) $((RANDOM*RANDOM*RANDOM)))"
+      $((RANDOM * RANDOM)) $((RANDOM)) $((RANDOM)) $((RANDOM)) $((RANDOM * RANDOM * RANDOM)))"
   fi
   printf '{%s}' "$(echo "$g" | tr '[:lower:]' '[:upper:]')"
 }
@@ -97,7 +106,7 @@ gen_int() {
   if need_cmd shuf; then
     shuf -i 100000000-999999999 -n 1
   else
-    echo $(( (RANDOM<<15 | RANDOM) % 900000000 + 100000000 ))
+    echo $(((RANDOM << 15 | RANDOM) % 900000000 + 100000000))
   fi
 }
 
@@ -107,25 +116,27 @@ ensure_pkgs() {
   local need=() p
   for p in "$@"; do
     case "$p" in
-      jq)              need_cmd jq        || need+=(jq) ;;
-      curl)            need_cmd curl      || need+=(curl) ;;
-      openssl)         need_cmd openssl   || need+=(openssl) ;;
-      unzip)           need_cmd unzip     || need+=(unzip) ;;
-      uuidgen|uuid-runtime)
-                       need_cmd uuidgen   || need+=(uuid-runtime) ;;
-      ip|iproute2)     need_cmd ip        || need+=(iproute2) ;;
+      jq) need_cmd jq || need+=(jq) ;;
+      curl) need_cmd curl || need+=(curl) ;;
+      openssl) need_cmd openssl || need+=(openssl) ;;
+      unzip) need_cmd unzip || need+=(unzip) ;;
+      uuidgen | uuid-runtime)
+        need_cmd uuidgen || need+=(uuid-runtime)
+        ;;
+      ip | iproute2) need_cmd ip || need+=(iproute2) ;;
       ca-certificates) # 不是命令，按文件/目录是否存在判断
-                       [[ -e /etc/ssl/certs/ca-certificates.crt || -d /etc/ssl/certs ]] \
-                         || need+=(ca-certificates) ;;
-      *)               need_cmd "$p"      || need+=("$p") ;;
+        [[ -e /etc/ssl/certs/ca-certificates.crt || -d /etc/ssl/certs ]] ||
+          need+=(ca-certificates)
+        ;;
+      *) need_cmd "$p" || need+=("$p") ;;
     esac
   done
   [[ ${#need[@]} -eq 0 ]] && return 0
   if need_cmd apt-get; then
     info "安装依赖：${need[*]}"
     DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${need[@]}" \
-      || warn "部分依赖安装失败：${need[*]}（请手动安装）"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${need[@]}" ||
+      warn "部分依赖安装失败：${need[*]}（请手动安装）"
   elif need_cmd dnf; then
     info "安装依赖：${need[*]}"
     dnf install -y "${need[@]}" >/dev/null 2>&1 || warn "部分依赖安装失败：${need[*]}"
