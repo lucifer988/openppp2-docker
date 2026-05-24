@@ -79,12 +79,13 @@ jobs:
           build-args: |
             OPENPPP2_ZIP_URL=${{ steps.up.outputs.url }}
             OPENPPP2_ZIP_SHA256=${{ steps.up.outputs.sha }}
-          provenance: true
-          sbom: true
+          # 证明（attestations）需要镜像 exporter；PR 只构建不推送，故仅在推送时开启
+          provenance: ${{ github.event_name != 'pull_request' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
 
       - name: Trivy image scan
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.30.0
         with:
           image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: sarif
