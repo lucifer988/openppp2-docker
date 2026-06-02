@@ -1,9 +1,0 @@
-# ShellCheck 配置（CI 与本地一致）
-#
-# 本项目是「主脚本 + source lib/*.sh 模块」结构：
-#   - config.sh 是集中常量文件，变量在被 source 的其它模块里消费；
-#   - lib/*.sh 里的函数互相调用、共享 config.sh 的全局变量。
-# 因此开启 external-sources 让 ShellCheck 跟随 source；并关闭 SC2034
-# （“变量未使用”）——它对这种跨文件常量定义会大量误报。
-external-sources=true
-disable=SC2034
