@@ -55,6 +55,23 @@ sudo OPENPPP2_REF="${TAG}" \
 
 本项目本地构建 Docker 镜像时会优先使用这个缓存地址，而不是直接打上游 release。
 
+## Docker 镜像自动发布
+
+仓库 Actions 还会在以下情况自动构建并推送 GHCR 镜像：
+
+- `main` 分支中的 `Dockerfile`
+- `.github/upstream/openppp2-linux-amd64-simd.json`（即上游 zip 缓存版本变化）
+- 手动触发 `Build and publish Docker image`
+- 推送正式 tag（如 `v2.3.0`）
+
+镜像地址：
+
+- `ghcr.io/lucifer988/openppp2:latest`
+- `ghcr.io/lucifer988/openppp2:main`
+- `ghcr.io/lucifer988/openppp2:upstream-<上游版本>`
+- `ghcr.io/lucifer988/openppp2:sha-<提交短 SHA>`
+- 正式 tag 推送时还会产出 `ghcr.io/lucifer988/openppp2:vX.Y.Z`
+
 ## 菜单说明
 
 运行脚本后会出现菜单：

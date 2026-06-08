@@ -1,0 +1,99 @@
+name: Build and publish Docker image
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - Dockerfile
+      - .github/workflows/docker-image.yml
+      - .github/upstream/openppp2-linux-amd64-simd.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGE_NAME: ghcr.io/lucifer988/openppp2
+      METADATA_FILE: .github/upstream/openppp2-linux-amd64-simd.json
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Read cached upstream metadata
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+
+          path = os.environ['METADATA_FILE']
+          with open(path, 'r', encoding='utf-8') as fh:
+              data = json.load(fh)
+
+          required = ['upstream_tag', 'cache_asset_url', 'sha256']
+          missing = [key for key in required if not data.get(key)]
+          if missing:
+              raise SystemExit(f'Missing metadata keys: {missing}')
+
+          out = os.environ['GITHUB_OUTPUT']
+          with open(out, 'a', encoding='utf-8') as fh:
+              fh.write(f'upstream_tag={data["upstream_tag"]}\n')
+              fh.write(f'zip_url={data["cache_asset_url"]}\n')
+              fh.write(f'zip_sha256={data["sha256"]}\n')
+          PY
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=openppp2 Docker image built from cached upstream openppp2 zip
+            org.opencontainers.image.version=${{ steps.upstream.outputs.upstream_tag }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=upstream-${{ steps.upstream.outputs.upstream_tag }},enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=tag
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            OPENPPP2_ZIP_URL=${{ steps.upstream.outputs.zip_url }}
+            OPENPPP2_ZIP_SHA256=${{ steps.upstream.outputs.zip_sha256 }}
