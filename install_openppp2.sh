@@ -8,13 +8,19 @@ set -euo pipefail
 # umask 077 确保新建文件默认 600、目录 700，避免世界可读。各处仍会显式 chmod 兜底。
 umask 077
 
-# 本仓库固定下载基准（tag）。自举阶段早于 source config.sh，故这里也要有一份默认值，
-# 必须与 config.sh 中的 REPO_REF 保持一致。可用 OPENPPP2_REF 覆盖。
-OPENPPP2_REF="${OPENPPP2_REF:-v2.4.0}"
+# 本仓库固定下载基准。当前默认跟随 main，避免仓库文件已更新但尚未打 tag 时自举直接 404。
+# 若你要安装某个正式版本，可显式传 OPENPPP2_REF=vX.Y.Z 覆盖。
+OPENPPP2_REF="${OPENPPP2_REF:-main}"
 
-# 完整项目 tar 包地址：锚定到固定 tag（不再默认 main 分支），保证可复现。
-# 可用环境变量 OPENPPP2_REPO_TARBALL 覆盖到镜像源。
-OPENPPP2_REPO_TARBALL="${OPENPPP2_REPO_TARBALL:-https://github.com/lucifer988/openppp2-docker/archive/refs/tags/${OPENPPP2_REF}.tar.gz}"
+# 完整项目 tar 包地址：默认跟随 main；若显式传入 tag/commit/自定义地址，仍可覆盖。
+# 规则：看起来像版本 tag（v1.2.3）就走 refs/tags，其余（main/分支名）走 refs/heads。
+if [[ -n "${OPENPPP2_REPO_TARBALL:-}" ]]; then
+  OPENPPP2_REPO_TARBALL="${OPENPPP2_REPO_TARBALL}"
+elif [[ "$OPENPPP2_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  OPENPPP2_REPO_TARBALL="https://github.com/lucifer988/openppp2-docker/archive/refs/tags/${OPENPPP2_REF}.tar.gz"
+else
+  OPENPPP2_REPO_TARBALL="https://github.com/lucifer988/openppp2-docker/archive/refs/heads/${OPENPPP2_REF}.tar.gz"
+fi
 
 # 解析自身所在目录（管道运行时可能拿不到，故容错）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$PWD")"

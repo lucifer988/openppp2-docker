@@ -262,33 +262,54 @@ build_image_local() {
     df="${APP_DIR}/Dockerfile"
   fi
 
-  local tag zipurl zipsha=""
-  # 用 jq 解析（jq 是本项目硬依赖）。注意 set -euo pipefail：命令替换里的管道一旦非 0
-  # 会触发 set -e 直接退出，走不到下面的"回退固定版本"。故显式 || true 兜底，确保失败时
-  # tag 为空字符串、继续往下走回退逻辑。
-  tag="$(
-    curl_retry -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null |
-      jq -r '.tag_name // empty' 2>/dev/null || true
-  )"
-  # 上游版本形如 1.0.0.26151；查询失败或格式异常（API 限流/字段改名）一律回退固定版本，
-  # 避免把畸形的 tag 拼进下载 URL 导致后续静默 404。
-  if [[ ! "$tag" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
-    warn "未能可靠解析上游最新版本（得到：'${tag:-空}'），回退固定版本 ${FALLBACK_UPSTREAM_TAG}。"
-    tag="$FALLBACK_UPSTREAM_TAG"
+  local tag zipurl zipsha="" meta="${SCRIPT_DIR}/.github/upstream/openppp2-linux-amd64-simd.json"
+
+  # 优先使用仓库内由 Actions 生成的缓存元数据：
+  # - 下载地址走本仓库自己的稳定 cache release，减少对上游 release 的直接依赖；
+  # - SHA256 已知，可保留完整性校验；
+  # - metadata 不存在/字段异常时，再回退到直接查询上游 release。
+  if [[ -f "$meta" ]]; then
+    tag="$(jq -r '.upstream_tag // empty' "$meta" 2>/dev/null || true)"
+    zipurl="$(jq -r '.cache_asset_url // empty' "$meta" 2>/dev/null || true)"
+    zipsha="$(jq -r '.sha256 // empty' "$meta" 2>/dev/null || true)"
+    if [[ "$tag" =~ ^[0-9]+(\.[0-9]+)+$ && -n "$zipurl" && -n "$zipsha" ]]; then
+      info "本地构建优先使用仓库缓存的上游 zip（${tag}）。"
+    else
+      warn "仓库缓存元数据存在但字段不完整，回退直接查询上游 release。"
+      tag=""
+      zipurl=""
+      zipsha=""
+    fi
   fi
-  # 仅当构建用的是我们内置了 SHA256 的固定版本时才校验完整性；
-  # 若用的是动态查询到的"最新版"，其 sha 未知，留空让 Dockerfile 跳过校验并告警。
-  if [[ "$tag" == "$FALLBACK_UPSTREAM_TAG" ]]; then
-    zipsha="$FALLBACK_UPSTREAM_SHA256"
-  else
-    warn "本地构建使用上游最新版 ${tag}，其 zip SHA256 未知，将跳过完整性校验。"
+
+  if [[ -z "$zipurl" ]]; then
+    # 用 jq 解析（jq 是本项目硬依赖）。注意 set -euo pipefail：命令替换里的管道一旦非 0
+    # 会触发 set -e 直接退出，走不到下面的"回退固定版本"。故显式 || true 兜底，确保失败时
+    # tag 为空字符串、继续往下走回退逻辑。
+    tag="$(
+      curl_retry -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null |
+        jq -r '.tag_name // empty' 2>/dev/null || true
+    )"
+    # 上游版本形如 1.0.0.26151；查询失败或格式异常（API 限流/字段改名）一律回退固定版本，
+    # 避免把畸形的 tag 拼进下载 URL 导致后续静默 404。
+    if [[ ! "$tag" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+      warn "未能可靠解析上游最新版本（得到：'${tag:-空}'），回退固定版本 ${FALLBACK_UPSTREAM_TAG}。"
+      tag="$FALLBACK_UPSTREAM_TAG"
+    fi
+    # 仅当构建用的是我们内置了 SHA256 的固定版本时才校验完整性；
+    # 若用的是动态查询到的"最新版"，其 sha 未知，留空让 Dockerfile 跳过校验并告警。
+    if [[ "$tag" == "$FALLBACK_UPSTREAM_TAG" ]]; then
+      zipsha="$FALLBACK_UPSTREAM_SHA256"
+    else
+      warn "本地构建使用上游最新版 ${tag}，其 zip SHA256 未知，将跳过完整性校验。"
+    fi
+    zipurl="https://github.com/${UPSTREAM_REPO}/releases/download/${tag}/openppp2-linux-amd64-simd.zip"
   fi
 
   # 本项目仅支持 amd64（x86_64）
   if [[ "$(uname -m)" != "x86_64" && "$(uname -m)" != "amd64" ]]; then
     die "本项目仅支持 amd64（x86_64）。"
   fi
-  zipurl="https://github.com/${UPSTREAM_REPO}/releases/download/${tag}/openppp2-linux-amd64-simd.zip"
 
   info "本地构建镜像 ${image}（上游 ${tag}）..."
   docker build -t "$image" \

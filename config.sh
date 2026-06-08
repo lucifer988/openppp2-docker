@@ -19,11 +19,10 @@ if [[ -f "${APP_DIR}/.env" ]]; then
   unset _k _v
 fi
 
-# 本仓库的固定下载基准（tag）。安装脚本、基准配置、兜底 Dockerfile 等所有"从本仓库下载"
-# 的动作都锚定到这个 tag，而不是 main 分支，保证可复现、可审计。
-# 可用环境变量 OPENPPP2_REF 覆盖（例如临时指向某个 tag/commit 调试）。
-# 注意：install_openppp2.sh 自举阶段（在 source 本文件之前）也有一份同名默认值，二者需一致。
-REPO_REF="${OPENPPP2_REF:-v2.4.0}"
+# 本仓库的下载基准。
+# 当前默认跟随 main，避免仓库文件已更新但尚未打正式 tag 时，README/自举脚本下载旧版或 404。
+# 若你要强制安装某个正式版本，可显式传 OPENPPP2_REF=vX.Y.Z 覆盖。
+REPO_REF="${OPENPPP2_REF:-main}"
 REPO_RAW_BASE="https://raw.githubusercontent.com/lucifer988/openppp2-docker/${REPO_REF}"
 # 本仓库标识（脚本自更新查询最新 release tag 用）
 SELF_REPO="${SELF_REPO:-lucifer988/openppp2-docker}"

@@ -18,28 +18,20 @@ openppp2 Docker 一键部署脚本，支持服务端和客户端快速部署。
 
 ## 一键安装
 
-自动安装最新正式版：
+推荐直接安装 **main 当前版本**（你刚上传并维护的就是这套内容）：
 
 ```bash
 REPO=lucifer988/openppp2-docker
+BRANCH=main
 
-TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' \
-  | head -n 1)"
+curl -fsSL "https://raw.githubusercontent.com/${REPO}/${BRANCH}/install_openppp2.sh" -o install_openppp2.sh
 
-[ -n "$TAG" ] || {
-  echo "获取最新版本失败"
-  exit 1
-}
-
-curl -fsSL "https://raw.githubusercontent.com/${REPO}/${TAG}/install_openppp2.sh" -o install_openppp2.sh
-
-sudo OPENPPP2_REF="${TAG}" \
-  OPENPPP2_REPO_TARBALL="https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
+sudo OPENPPP2_REF="${BRANCH}" \
+  OPENPPP2_REPO_TARBALL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
   bash install_openppp2.sh
 ```
 
-## 安装指定版本
+## 安装指定正式版本
 
 例如安装 `v2.3.0`：
 
@@ -54,20 +46,14 @@ sudo OPENPPP2_REF="${TAG}" \
   bash install_openppp2.sh
 ```
 
-## 安装 main 分支
+## 关于上游 zip 缓存
 
-想直接使用 main 分支最新版：
+仓库内的 Actions 会每天检测上游 `liulilittle/openppp2`。若发现新版，会自动缓存：
 
-```bash
-REPO=lucifer988/openppp2-docker
-BRANCH=main
+- 稳定地址：`https://github.com/lucifer988/openppp2-docker/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd.zip`
+- 版本化地址：`https://github.com/lucifer988/openppp2-docker/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd-<上游版本>.zip`
 
-curl -fsSL "https://raw.githubusercontent.com/${REPO}/${BRANCH}/install_openppp2.sh" -o install_openppp2.sh
-
-sudo OPENPPP2_REF="${BRANCH}" \
-  OPENPPP2_REPO_TARBALL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz" \
-  bash install_openppp2.sh
-```
+本项目本地构建 Docker 镜像时会优先使用这个缓存地址，而不是直接打上游 release。
 
 ## 菜单说明
 

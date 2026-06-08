@@ -89,15 +89,22 @@ jobs:
           unzip -Z1 ".cache/openppp2/$ASSET_NAME" | grep -qx 'ppp'
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure cache release exists
+      - name: Ensure cache release exists and stays hidden from latest release
         if: steps.compare.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view "$CACHE_RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$CACHE_RELEASE_TAG" >/dev/null 2>&1; then
+            gh api \
+              -X PATCH \
+              "repos/${{ github.repository }}/releases/tags/$CACHE_RELEASE_TAG" \
+              -f prerelease=true \
+              -f make_latest=false >/dev/null
+          else
             gh release create "$CACHE_RELEASE_TAG" \
+              --prerelease \
               --title "Cached upstream openppp2 zip" \
               --notes "Stable cache release for openppp2-linux-amd64-simd.zip consumed by this repository."
           fi
