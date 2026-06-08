@@ -67,10 +67,12 @@ LOG() { echo "[\$(date '+%F %T')] [self-update] \$*"; }
 command -v curl >/dev/null 2>&1 || { LOG "无 curl，跳过"; exit 0; }
 command -v tar >/dev/null 2>&1 || { LOG "无 tar，跳过"; exit 0; }
 
-latest="\$(curl -fsSL "https://api.github.com/repos/\${SELF_REPO}/releases/latest" 2>/dev/null |
-  grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[: ]*"([^"]+)".*/\1/')"
+latest="\$(curl -fsSL "https://api.github.com/repos/\${SELF_REPO}/releases?per_page=20" 2>/dev/null |
+  grep -oE '"tag_name": *"v[0-9]+\.[0-9]+\.[0-9]+"' |
+  head -n1 |
+  sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)"/\1/')"
 if [[ ! "\$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+\$ ]]; then
-  LOG "未解析到合法的最新 release tag（得到 '\${latest:-空}'），跳过。"
+  LOG "未解析到合法的正式 release tag（得到 '\${latest:-空}'），跳过。"
   exit 0
 fi
 
