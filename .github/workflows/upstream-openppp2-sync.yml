@@ -1,5 +1,9 @@
 name: Sync upstream openppp2 zip
 
+concurrency:
+  group: upstream-openppp2-sync
+  cancel-in-progress: false
+
 on:
   schedule:
     - cron: '17 2 * * *'
@@ -11,6 +15,7 @@ permissions:
 jobs:
   sync-upstream-openppp2:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       UPSTREAM_REPO: liulilittle/openppp2
       ASSET_NAME: openppp2-linux-amd64-simd.zip
@@ -18,7 +23,7 @@ jobs:
       METADATA_FILE: .github/upstream/openppp2-linux-amd64-simd.json
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve upstream latest asset
         id: upstream
