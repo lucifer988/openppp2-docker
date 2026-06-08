@@ -93,21 +93,69 @@ jobs:
         if: steps.compare.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$CACHE_RELEASE_TAG" >/dev/null 2>&1; then
-            gh api \
-              -X PATCH \
-              "repos/${{ github.repository }}/releases/tags/$CACHE_RELEASE_TAG" \
-              -f prerelease=true \
-              -f make_latest=false >/dev/null
-          else
-            gh release create "$CACHE_RELEASE_TAG" \
-              --prerelease \
-              --title "Cached upstream openppp2 zip" \
-              --notes "Stable cache release for openppp2-linux-amd64-simd.zip consumed by this repository."
-          fi
+          python3 <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          token = os.environ['GH_TOKEN']
+          repo = os.environ['REPO']
+          cache_tag = os.environ['CACHE_RELEASE_TAG']
+          title = 'Cached upstream openppp2 zip'
+          notes = 'Stable cache release for openppp2-linux-amd64-simd.zip consumed by this repository.'
+
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'User-Agent': 'github-actions-openppp2-sync',
+          }
+
+          def api(path, method='GET', payload=None):
+              body = None if payload is None else json.dumps(payload).encode('utf-8')
+              req = urllib.request.Request(
+                  f'https://api.github.com{path}',
+                  data=body,
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      raw = resp.read().decode('utf-8')
+                      return resp.status, json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as exc:
+                  raw = exc.read().decode('utf-8', 'replace')
+                  try:
+                      data = json.loads(raw) if raw else {}
+                  except json.JSONDecodeError:
+                      data = {'raw': raw}
+                  return exc.code, data
+
+          status, release = api(f'/repos/{repo}/releases/tags/{cache_tag}')
+          payload = {
+              'tag_name': cache_tag,
+              'name': title,
+              'body': notes,
+              'prerelease': True,
+              'make_latest': 'false',
+          }
+
+          if status == 200:
+              release_id = release['id']
+              patch_status, patch_resp = api(f'/repos/{repo}/releases/{release_id}', method='PATCH', payload=payload)
+              if patch_status not in (200, 201):
+                  raise SystemExit(f'Failed to patch cache release: HTTP {patch_status} {patch_resp}')
+          elif status == 404:
+              create_status, create_resp = api(f'/repos/{repo}/releases', method='POST', payload=payload)
+              if create_status not in (200, 201):
+                  raise SystemExit(f'Failed to create cache release: HTTP {create_status} {create_resp}')
+          else:
+              raise SystemExit(f'Failed to query cache release: HTTP {status} {release}')
+          PY
 
       - name: Upload cached release assets
         if: steps.compare.outputs.changed == 'true'
