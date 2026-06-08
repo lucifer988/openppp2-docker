@@ -1,0 +1,10 @@
+{
+  "upstream_repo": "liulilittle/openppp2",
+  "upstream_tag": "1.0.0.26151",
+  "asset_name": "openppp2-linux-amd64-simd.zip",
+  "sha256": "8718483672c9cab36fedd3ebdb233600d967aba9452a074af6a8620473639d29",
+  "upstream_asset_url": "https://github.com/liulilittle/openppp2/releases/download/1.0.0.26151/openppp2-linux-amd64-simd.zip",
+  "cache_release_tag": "upstream-openppp2-cache",
+  "cache_asset_url": "https://github.com/lucifer988/openppp2-docker/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd.zip",
+  "versioned_cache_asset_url": "https://github.com/lucifer988/openppp2-docker/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd-1.0.0.26151.zip"
+}
