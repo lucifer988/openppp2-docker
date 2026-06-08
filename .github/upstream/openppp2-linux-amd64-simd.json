@@ -1,6 +1,6 @@
 {
   "upstream_repo": "liulilittle/openppp2",
-  "upstream_tag": "0.0.0-force-refresh",
+  "upstream_tag": "1.0.0.26151",
   "asset_name": "openppp2-linux-amd64-simd.zip",
   "sha256": "8718483672c9cab36fedd3ebdb233600d967aba9452a074af6a8620473639d29",
   "upstream_asset_url": "https://github.com/liulilittle/openppp2/releases/download/1.0.0.26151/openppp2-linux-amd64-simd.zip",
