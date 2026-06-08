@@ -65,14 +65,7 @@ jobs:
           mkdir -p "$(dirname "$METADATA_FILE")"
           current_tag=""
           if [ -f "$METADATA_FILE" ]; then
-            current_tag="$(python3 - <<'PY'
-            import json, os
-            path = os.environ['METADATA_FILE']
-            with open(path, 'r', encoding='utf-8') as fh:
-                data = json.load(fh)
-            print(data.get('upstream_tag', ''))
-            PY
-            )"
+            current_tag="$(python3 -c 'import json, os; data=json.load(open(os.environ["METADATA_FILE"], "r", encoding="utf-8")); print(data.get("upstream_tag", ""))')"
           fi
 
           if [ "$current_tag" = "${{ steps.upstream.outputs.tag }}" ]; then
