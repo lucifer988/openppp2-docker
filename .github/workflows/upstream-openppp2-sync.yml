@@ -1,0 +1,167 @@
+name: Sync upstream openppp2 zip
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-upstream-openppp2:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_REPO: liulilittle/openppp2
+      ASSET_NAME: openppp2-linux-amd64-simd.zip
+      CACHE_RELEASE_TAG: upstream-openppp2-cache
+      METADATA_FILE: .github/upstream/openppp2-linux-amd64-simd.json
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream latest asset
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          upstream_repo = os.environ['UPSTREAM_REPO']
+          asset_name = os.environ['ASSET_NAME']
+          api_url = f'https://api.github.com/repos/{upstream_repo}/releases/latest'
+
+          req = urllib.request.Request(api_url, headers={
+              'Accept': 'application/vnd.github+json',
+              'User-Agent': 'github-actions-openppp2-sync'
+          })
+          with urllib.request.urlopen(req) as resp:
+              data = json.load(resp)
+
+          tag = data.get('tag_name', '').strip()
+          if not tag:
+              raise SystemExit('Missing upstream tag_name')
+
+          assets = data.get('assets', [])
+          asset = next((item for item in assets if item.get('name') == asset_name), None)
+          if not asset:
+              raise SystemExit(f'Asset not found: {asset_name}')
+
+          out = os.environ['GITHUB_OUTPUT']
+          with open(out, 'a', encoding='utf-8') as fh:
+              fh.write(f'tag={tag}\n')
+              fh.write(f'asset_url={asset["browser_download_url"]}\n')
+          PY
+
+      - name: Check whether upstream changed
+        id: compare
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$METADATA_FILE")"
+          current_tag=""
+          if [ -f "$METADATA_FILE" ]; then
+            current_tag="$(python3 - <<'PY'
+            import json, os
+            path = os.environ['METADATA_FILE']
+            with open(path, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+            print(data.get('upstream_tag', ''))
+            PY
+            )"
+          fi
+
+          if [ "$current_tag" = "${{ steps.upstream.outputs.tag }}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No upstream update: $current_tag"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Upstream changed: ${current_tag:-<none>} -> ${{ steps.upstream.outputs.tag }}"
+          fi
+
+      - name: Download and verify upstream zip
+        if: steps.compare.outputs.changed == 'true'
+        id: download
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/openppp2
+          curl -fL "${{ steps.upstream.outputs.asset_url }}" -o ".cache/openppp2/$ASSET_NAME"
+          sha256="$(sha256sum ".cache/openppp2/$ASSET_NAME" | awk '{print $1}')"
+          unzip -t ".cache/openppp2/$ASSET_NAME"
+          unzip -Z1 ".cache/openppp2/$ASSET_NAME" | grep -qx 'ppp'
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure cache release exists
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$CACHE_RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$CACHE_RELEASE_TAG" \
+              --title "Cached upstream openppp2 zip" \
+              --notes "Stable cache release for openppp2-linux-amd64-simd.zip consumed by this repository."
+          fi
+
+      - name: Upload cached release assets
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_path=".cache/openppp2/$ASSET_NAME"
+          versioned_path=".cache/openppp2/openppp2-linux-amd64-simd-${{ steps.upstream.outputs.tag }}.zip"
+          cp "$base_path" "$versioned_path"
+          gh release upload "$CACHE_RELEASE_TAG" "$base_path" --clobber
+          gh release upload "$CACHE_RELEASE_TAG" "$versioned_path" --clobber
+
+      - name: Update metadata file
+        if: steps.compare.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json
+          import os
+
+          metadata = {
+              'upstream_repo': os.environ['UPSTREAM_REPO'],
+              'upstream_tag': os.environ['UPSTREAM_TAG'],
+              'asset_name': os.environ['ASSET_NAME'],
+              'sha256': os.environ['SHA256'],
+              'upstream_asset_url': os.environ['ASSET_URL'],
+              'cache_release_tag': os.environ['CACHE_RELEASE_TAG'],
+              'cache_asset_url': os.environ['CACHE_ASSET_URL'],
+              'versioned_cache_asset_url': os.environ['VERSIONED_CACHE_ASSET_URL'],
+          }
+          path = os.environ['METADATA_FILE']
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          with open(path, 'w', encoding='utf-8') as fh:
+              json.dump(metadata, fh, ensure_ascii=False, indent=2)
+              fh.write('\n')
+          PY
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          SHA256: ${{ steps.download.outputs.sha256 }}
+          ASSET_URL: ${{ steps.upstream.outputs.asset_url }}
+          CACHE_ASSET_URL: https://github.com/${{ github.repository }}/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd.zip
+          VERSIONED_CACHE_ASSET_URL: https://github.com/${{ github.repository }}/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd-${{ steps.upstream.outputs.tag }}.zip
+
+      - name: Commit metadata update
+        if: steps.compare.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$METADATA_FILE"
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: sync upstream openppp2 ${{ steps.upstream.outputs.tag }}"
+          git push
