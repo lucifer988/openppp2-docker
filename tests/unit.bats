@@ -176,3 +176,21 @@ _load_docker_with_stubs() {
   run _run_with_timeout 0 true
   [ "$status" -eq 0 ]
 }
+
+@test "write_compose_server: includes production process limits" {
+  source "$REPO/config.sh"
+  APP_DIR="$BATS_TEST_TMPDIR/app-prod"
+  COMPOSE_FILE="$APP_DIR/docker-compose.yml"
+  mkdir -p "$APP_DIR"
+  source "$REPO/lib/compose.sh"
+  write_compose_server "ghcr.io/test/openppp2:latest" "appsettings.json"
+  grep -q '^    init: true$' "$COMPOSE_FILE"
+  grep -q 'soft: 1048576' "$COMPOSE_FILE"
+  grep -q 'hard: 1048576' "$COMPOSE_FILE"
+}
+
+@test "versioned upstream cache URL is preferred" {
+  local url
+  url="$(jq -r '.versioned_cache_asset_url // .cache_asset_url' "$REPO/.github/upstream/openppp2-linux-amd64-simd.json")"
+  [[ "$url" == *"-1.0.0.26151.zip" ]]
+}

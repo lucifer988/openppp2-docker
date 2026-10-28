@@ -83,6 +83,14 @@ source "${SCRIPT_DIR}/lib/client.sh"
 #  主安装逻辑（编排层，调用各模块函数）
 # ============================================================
 do_install() {
+  if [[ -f "${APP_DIR}/.role" ]]; then
+    local existing_role confirm_overwrite
+    existing_role="$(cat "${APP_DIR}/.role" 2>/dev/null || echo unknown)"
+    warn "检测到已有 ${existing_role} 部署。重新安装可能覆盖配置/密钥并中断现有服务。"
+    prompt confirm_overwrite "确认继续覆盖？(yes/no)" "no"
+    [[ "$confirm_overwrite" == "yes" ]] || die "已取消，现有部署未修改。"
+    do_backup
+  fi
   echo "=============================="
   echo "  请选择安装/部署角色："
   echo "    1) 服务端（Server）"
@@ -387,34 +395,33 @@ do_uninstall() {
   local KEEP_BACKUP
   prompt KEEP_BACKUP "是否保留备份文件（backups 目录）？(yes/no)" "yes"
 
+  if need_cmd docker; then
+    local running
+    running="$(docker ps --filter name=openppp2 --format '{{.Names}}' 2>/dev/null || true)"
+    if [[ -n "$running" ]]; then
+      warn "以下容器仍在运行，请手动停止后再卸载：$running"
+      die "卸载中止：仍有运行中的 openppp2 容器。"
+    fi
+  fi
+
   if [[ "$KEEP_BACKUP" == "yes" ]]; then
-    local tmp_backup=""
+    local preserved_backup=""
     if [[ -d "$BACKUP_DIR" ]]; then
-      tmp_backup="/tmp/openppp2-backups-$(date +%Y%m%d_%H%M%S)"
-      mv "$BACKUP_DIR" "$tmp_backup" >/dev/null 2>&1 || true
+      preserved_backup="$(mktemp -d "${APP_DIR}.backups.XXXXXX")"
+      rmdir "$preserved_backup"
+      mv "$BACKUP_DIR" "$preserved_backup"
     fi
-
-    if need_cmd docker; then
-      local running
-      running="$(docker ps --filter name=openppp2 --format '{{.Names}}' 2>/dev/null || true)"
-      if [[ -n "$running" ]]; then
-        warn "以下容器仍在运行，请手动停止后再卸载：$running"
-        die "卸载中止：仍有运行中的 openppp2 容器。"
-      fi
-    fi
-
     info "删除目录 ${APP_DIR} ..."
     rm -rf "$APP_DIR"
-
-    if [[ -n "$tmp_backup" && -d "$tmp_backup" ]]; then
+    if [[ -n "$preserved_backup" && -d "$preserved_backup" ]]; then
       mkdir -p "$APP_DIR"
-      mv "$tmp_backup" "$BACKUP_DIR" >/dev/null 2>&1 || true
+      mv "$preserved_backup" "$BACKUP_DIR"
+      chmod 700 "$APP_DIR" "$BACKUP_DIR" 2>/dev/null || true
     fi
   else
     info "删除目录 ${APP_DIR} ..."
     rm -rf "$APP_DIR"
   fi
-
   rm -f /etc/sysctl.d/99-openppp2.conf >/dev/null 2>&1 || true
   sysctl --system >/dev/null 2>&1 || true
 

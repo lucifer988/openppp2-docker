@@ -20,6 +20,17 @@ do_backup() {
   [[ -f "${APP_DIR}/.env" ]] && cp -a "${APP_DIR}/.env" "$snap"/ || true
 
   info "已备份 ${n} 个文件到：${snap}"
+  prune_backups
+}
+
+prune_backups() {
+  local keep="${BACKUP_KEEP:-10}" count=0 dir
+  [[ "$keep" =~ ^[0-9]+$ ]] || return 0
+  (( keep > 0 )) || return 0
+  while IFS= read -r dir; do
+    count=$((count + 1))
+    (( count <= keep )) || rm -rf -- "$dir"
+  done < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
 }
 
 # 找到最新备份目录

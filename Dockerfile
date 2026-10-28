@@ -7,7 +7,7 @@ WORKDIR /opt/openppp2
 # 这样即使手工 `docker build .`，也优先使用当前仓库已缓存、可校验的 zip，减少对上游 release 的直接依赖。
 # OPENPPP2_ZIP_SHA256 为该 zip 的 SHA256：非空时强制校验（CI/复现构建必校验），
 # 留空则跳过校验并打印告警（仅用于无法预知 sha 的临时构建，例如直接追上游最新版本时）。
-ARG OPENPPP2_ZIP_URL="https://github.com/lucifer988/openppp2-docker/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd.zip"
+ARG OPENPPP2_ZIP_URL="https://github.com/lucifer988/openppp2-docker/releases/download/upstream-openppp2-cache/openppp2-linux-amd64-simd-1.0.0.26151.zip"
 ARG OPENPPP2_ZIP_SHA256="8718483672c9cab36fedd3ebdb233600d967aba9452a074af6a8620473639d29"
 RUN set -eux; \
     wget -O openppp2.zip "${OPENPPP2_ZIP_URL}"; \

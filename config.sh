@@ -68,6 +68,7 @@ CPUS="${CPUS:-}"                 # CPU 配额，如 "1.5"；默认空=不限（�
 #   - .image_channel 记录浮动标签（如 :latest），自动更新据此"发现"上游新版本；
 #   - 更新流程：拉取 channel -> 解析新 digest -> 切换并健康检查 -> 通过则重新固定，否则回滚旧 digest。
 IMAGE_KEEP="${IMAGE_KEEP:-2}" # 本机保留的 openppp2 镜像份数（当前+上一个供回滚），其余自动清理；<1 视为不清理
+BACKUP_KEEP="${BACKUP_KEEP:-10}" # 配置/自动更新快照最多保留份数；<1 视为不清理
 
 # 自动更新失败通知（systemd OnFailure 触发）。二者都留空则仅写 journald 日志。
 NOTIFY_WEBHOOK="${NOTIFY_WEBHOOK:-}" # 失败时 POST JSON 到该 URL（企业微信/Slack/飞书等机器人）
@@ -108,6 +109,9 @@ DEFAULT_BOOT_DELAY="${DEFAULT_BOOT_DELAY:-20}"
 
 # 严格开机延迟模式
 STRICT_BOOT_DELAY_MODE="${STRICT_BOOT_DELAY_MODE:-no}"
+
+# 客户端出网健康检查 URL（空格分隔多个候选，任一通过即视为出网正常）
+EGRESS_URLS="${EGRESS_URLS:-https://ifconfig.me}"
 
 # 健康检查参数
 HEALTH_RETRIES="${HEALTH_RETRIES:-10}"

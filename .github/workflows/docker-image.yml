@@ -52,7 +52,7 @@ jobs:
           out = os.environ['GITHUB_OUTPUT']
           with open(out, 'a', encoding='utf-8') as fh:
               fh.write(f'upstream_tag={data["upstream_tag"]}\n')
-              fh.write(f'zip_url={data["cache_asset_url"]}\n')
+              fh.write(f'zip_url={data.get("versioned_cache_asset_url") or data["cache_asset_url"]}\n')
               fh.write(f'zip_sha256={data["sha256"]}\n')
           PY
 

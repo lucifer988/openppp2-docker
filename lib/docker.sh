@@ -270,7 +270,7 @@ build_image_local() {
   # - metadata 不存在/字段异常时，再回退到直接查询上游 release。
   if [[ -f "$meta" ]]; then
     tag="$(jq -r '.upstream_tag // empty' "$meta" 2>/dev/null || true)"
-    zipurl="$(jq -r '.cache_asset_url // empty' "$meta" 2>/dev/null || true)"
+    zipurl="$(jq -r '.versioned_cache_asset_url // .cache_asset_url // empty' "$meta" 2>/dev/null || true)"
     zipsha="$(jq -r '.sha256 // empty' "$meta" 2>/dev/null || true)"
     if [[ "$tag" =~ ^[0-9]+(\.[0-9]+)+$ && -n "$zipurl" && -n "$zipsha" ]]; then
       info "本地构建优先使用仓库缓存的上游 zip（${tag}）。"
@@ -362,7 +362,7 @@ pin_compose_to_digest() {
 health_check_one() {
   local name="$1" role="${2:-}" probe="${3:-}"
   local i state health
-  local egress_url="https://ifconfig.me"
+  local egress_urls="${EGRESS_URLS:-https://ifconfig.me}" egress_url
 
   # 1) 等待容器 Running
   for ((i = 0; i < HEALTH_RETRIES; i++)); do
@@ -397,6 +397,15 @@ health_check_one() {
     warn "容器内未发现运行中的 ppp 进程：$name"
     return 1
   fi
+
+  _egress_probe() {
+    local proxy="$1"; shift
+    local -a auth=("$@")
+    for egress_url in $egress_urls; do
+      curl -fsS "${auth[@]}" -x "$proxy" --max-time 10 -o /dev/null "$egress_url" 2>/dev/null && return 0
+    done
+    return 1
+  }
 
   # 4) 角色功能探测
   case "$role" in
@@ -439,7 +448,7 @@ health_check_one() {
       local ok=1
       # HTTP 代理出网探测（openppp2 的 http-proxy 无认证字段，故不带凭据）
       if [[ -n "$lan" && -n "$hport" && "$hport" != "0" ]]; then
-        if curl -fsS -x "http://${lan}:${hport}" --max-time 10 -o /dev/null "$egress_url" 2>/dev/null; then
+        if _egress_probe "http://${lan}:${hport}"; then
           info "HTTP 代理出网正常：http://${lan}:${hport}"
         else
           warn "HTTP 代理出网探测失败：http://${lan}:${hport}（隧道可能尚未建立，可稍后重试）。"
@@ -451,7 +460,7 @@ health_check_one() {
       if [[ -n "$lan" && -n "$sport" && "$sport" != "0" ]]; then
         local -a sauth=()
         [[ -n "$suser" ]] && sauth=(--proxy-user "${suser}:${spass}")
-        if curl -fsS "${sauth[@]}" -x "socks5h://${lan}:${sport}" --max-time 10 -o /dev/null "$egress_url" 2>/dev/null; then
+        if _egress_probe "socks5h://${lan}:${sport}" "${sauth[@]}"; then
           info "SOCKS5 代理出网正常：socks5h://${lan}:${sport}"
         else
           warn "SOCKS5 代理出网探测失败：socks5h://${lan}:${sport}（隧道可能尚未建立，可稍后重试）。"

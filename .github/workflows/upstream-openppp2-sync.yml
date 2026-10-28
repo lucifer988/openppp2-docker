@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   sync-upstream-openppp2:
@@ -218,3 +219,11 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "chore: sync upstream openppp2 ${{ steps.upstream.outputs.tag }}"
           git push
+
+      - name: Trigger image build after sync
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: gh workflow run docker-image.yml --repo "$REPO" --ref main

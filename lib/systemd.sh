@@ -120,6 +120,7 @@ COMPOSE_FILE="${COMPOSE_FILE}"
 BACKUP_DIR="${BACKUP_DIR}"
 AUTO_ROLLBACK="${rollback}"
 IMAGE_KEEP="${IMAGE_KEEP}"
+BACKUP_KEEP="${BACKUP_KEEP:-10}"
 CHANNEL_DEFAULT="${DEFAULT_IMAGE}"
 SELF_UPDATE="${SELF_UPDATE}"
 SELF_UPDATE_SH="/usr/local/bin/openppp2-self-update.sh"
@@ -179,9 +180,9 @@ cp -a "\$APP_DIR"/seccomp-openppp2.json "\$SNAP"/ 2>/dev/null || true
 
 # 1) 拉取发现通道镜像并解析其 digest
 LOG "拉取发现通道镜像：\$CHANNEL"
-if ! docker pull "\$CHANNEL" >/dev/null 2>&1; then
-  LOG "pull 失败（\$CHANNEL），保持现状退出。"
-  exit 0
+if ! docker pull "\$CHANNEL"; then
+  LOG "pull 失败（\$CHANNEL），保持现状并上报失败。"
+  exit 1
 fi
 NEW_REF="\$(resolve_digest "\$CHANNEL")"
 if [[ -z "\$NEW_REF" ]]; then
@@ -204,7 +205,7 @@ echo "\$NEW_REF" >"\$APP_DIR/.image"
 # 3) 健康检查：容器 Running + ppp 进程 + HEALTHCHECK + 真实出网/监听探测
 health_ok() {
   local ok=1 c st bind hport sport hs
-  local egress_url="https://ifconfig.me"
+  local egress_url egress_ok
   local -a sauth=()
   for c in "\${CONTS[@]}"; do
     st="\$(docker inspect -f '{{.State.Status}}' "\$c" 2>/dev/null || echo missing)"
@@ -215,6 +216,15 @@ health_ok() {
       LOG "不健康：\$c 内无 ppp 进程"; ok=0; continue
     fi
   done
+
+  egress_probe() {
+    local proxy="\$1"; shift
+    local url
+    for url in ${EGRESS_URLS:-https://ifconfig.me}; do
+      curl -fsS "\$@" -x "\$proxy" --max-time 10 -o /dev/null "\$url" 2>/dev/null && return 0
+    done
+    return 1
+  }
 
   if [[ -f "\$APP_DIR/.instances" ]] && command -v curl >/dev/null 2>&1; then
     local svc cfg tun tunip tungw nic ngw suser spass
@@ -230,14 +240,14 @@ health_ok() {
       fi
       [[ -n "\$bind" ]] || continue
       if [[ -n "\$hport" && "\$hport" != "0" ]]; then
-        curl -fsS -x "http://\${bind}:\${hport}" --max-time 10 -o /dev/null "\$egress_url" 2>/dev/null \\
+        egress_probe "http://\${bind}:\${hport}" \\
           || { LOG "不健康：\$svc HTTP 代理出网失败 (\${bind}:\${hport})"; ok=0; }
       fi
       if [[ -n "\$sport" && "\$sport" != "0" ]]; then
         # 配置了 SOCKS5 用户名/密码则带认证探测，避免 openppp2 要求认证时 407 误判不健康进而误回滚
         sauth=()
         [[ -n "\$suser" ]] && sauth=(--proxy-user "\${suser}:\${spass}")
-        curl -fsS "\${sauth[@]}" -x "socks5h://\${bind}:\${sport}" --max-time 10 -o /dev/null "\$egress_url" 2>/dev/null \\
+        egress_probe "socks5h://\${bind}:\${sport}" "\${sauth[@]}" \\
           || { LOG "不健康：\$svc SOCKS5 代理出网失败 (\${bind}:\${sport})"; ok=0; }
       fi
     done <"\$APP_DIR/.instances"
@@ -258,6 +268,16 @@ health_ok() {
 }
 
 # 更新成功后按 IMAGE_KEEP 清理旧镜像（按创建时间倒序，保留最新 N 个，其余 rmi；在用/被引用的会失败，忽略）
+prune_backups() {
+  local keep="${BACKUP_KEEP:-10}" count=0 dir
+  [[ "\$keep" =~ ^[0-9]+\$ ]] || return 0
+  (( keep > 0 )) || return 0
+  while IFS= read -r dir; do
+    count=\$((count + 1))
+    (( count <= keep )) || rm -rf -- "\$dir"
+  done < <(find "\$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+}
+
 prune_images() {
   local keep="\$IMAGE_KEEP" repo ids n=0
   [[ "\$keep" =~ ^[0-9]+\$ ]] || return 0
@@ -284,6 +304,7 @@ done
 if [[ "\$HC_OK" == "1" ]]; then
   LOG "更新成功，健康检查通过（运行镜像：\$NEW_REF）。"
   prune_images
+  prune_backups
   exit 0
 fi
 

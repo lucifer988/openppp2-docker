@@ -20,6 +20,12 @@ _image_file() { echo "${APP_DIR}/${IMAGE_REF_FILE_NAME}"; }
 #   - 资源上限防止异常实例（内存泄漏/fork 失控）拖垮宿主机。
 _compose_common_block() {
   cat <<EOF
+    init: true
+    stop_grace_period: 30s
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
     cap_drop: ["ALL"]
     cap_add: ["NET_ADMIN", "NET_RAW"]
     security_opt:
